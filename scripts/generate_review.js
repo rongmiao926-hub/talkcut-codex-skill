@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { normalizeSelectedIndices } = require('./auto_selected_utils');
 
 const subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
@@ -29,8 +30,13 @@ const words = JSON.parse(fs.readFileSync(subtitlesFile, 'utf8'));
 let autoSelected = [];
 
 if (fs.existsSync(autoSelectedFile)) {
-  autoSelected = JSON.parse(fs.readFileSync(autoSelectedFile, 'utf8'));
+  const rawAutoSelected = JSON.parse(fs.readFileSync(autoSelectedFile, 'utf8'));
+  const normalized = normalizeSelectedIndices(words, rawAutoSelected);
+  autoSelected = normalized.indices;
   console.log('AI 预选:', autoSelected.length, '个元素');
+  if (normalized.addedBridgeGaps > 0) {
+    console.log('🔗 已补充夹在删除段之间的短停顿:', normalized.addedBridgeGaps, '个');
+  }
 }
 
 const html = `<!DOCTYPE html>

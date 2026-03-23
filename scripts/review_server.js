@@ -102,6 +102,26 @@ function buildAdjustedDeleteSegments(deleteList, options) {
   return adjusted;
 }
 
+function buildAudioFilter(seg, index, totalSegments, fadeSec) {
+  const segDuration = Math.max(0, seg.end - seg.start);
+  const maxFadeSec = Math.max(0, segDuration / 2 - 0.001);
+  const effectiveFadeSec = Math.min(fadeSec, maxFadeSec);
+
+  let filter = `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS`;
+
+  if (effectiveFadeSec > 0 && totalSegments > 1) {
+    if (index > 0) {
+      filter += `,afade=t=in:st=0:d=${effectiveFadeSec.toFixed(3)}`;
+    }
+    if (index < totalSegments - 1) {
+      const fadeOutStart = Math.max(0, segDuration - effectiveFadeSec);
+      filter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${effectiveFadeSec.toFixed(3)}`;
+    }
+  }
+
+  return `${filter}[a${index}]`;
+}
+
 const MIME_TYPES = {
   '.html': 'text/html',
   '.js': 'application/javascript',
@@ -355,7 +375,7 @@ function executeFFmpegCut(input, deleteList, output) {
   const CUT_MIN_DELETE_MS = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
   const CROSSFADE_MS = parseMs(envConfig.CROSSFADE_MS, 30);
 
-  console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频crossfade=${CROSSFADE_MS}ms`);
+  console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
 
   // 检测音频偏移量（audio.mp3 的 start_time）
   let audioOffset = 0;
@@ -418,31 +438,27 @@ function executeFFmpegCut(input, deleteList, output) {
 
   console.log(`保留 ${keepSegments.length} 个片段，删除 ${mergedDelete.length} 个片段`);
 
-  // 生成 filter_complex（带 crossfade）
+  // 生成 filter_complex（保时长淡入淡出）
   let filters = [];
   let vconcat = '';
+  let aconcat = '';
 
   for (let i = 0; i < keepSegments.length; i++) {
     const seg = keepSegments[i];
     filters.push(`[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`);
-    filters.push(`[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
+    filters.push(buildAudioFilter(seg, i, keepSegments.length, crossfadeSec));
     vconcat += `[v${i}]`;
+    aconcat += `[a${i}]`;
   }
 
   // 视频直接 concat
   filters.push(`${vconcat}concat=n=${keepSegments.length}:v=1:a=0[outv]`);
 
-  // 音频使用 acrossfade 逐个拼接（消除接缝咔声）
+  // 音频先做轻微淡入淡出，再直接 concat，避免累计缩短总时长
   if (keepSegments.length === 1) {
     filters.push(`[a0]anull[outa]`);
   } else {
-    let currentLabel = 'a0';
-    for (let i = 1; i < keepSegments.length; i++) {
-      const nextLabel = `a${i}`;
-      const outLabel = (i === keepSegments.length - 1) ? 'outa' : `amid${i}`;
-      filters.push(`[${currentLabel}][${nextLabel}]acrossfade=d=${crossfadeSec.toFixed(3)}:c1=tri:c2=tri[${outLabel}]`);
-      currentLabel = outLabel;
-    }
+    filters.push(`${aconcat}concat=n=${keepSegments.length}:v=0:a=1[outa]`);
   }
 
   const filterComplex = filters.join(';');

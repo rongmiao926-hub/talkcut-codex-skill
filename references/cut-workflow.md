@@ -160,6 +160,19 @@ require('fs').writeFileSync('auto_selected.json', JSON.stringify(selected, null,
 - 静音索引必须保留，不能被 AI 结果覆盖
 - 最终 `auto_selected.json` 必须是去重、升序的数组
 
+AI 补完索引后，再执行一次规范化，补上“夹在两个待删片段之间的小停顿”：
+
+```bash
+node "$SKILL_DIR/scripts/refine_auto_selected.js" \
+  "../1_转录/subtitles_words.json" \
+  "auto_selected.json"
+```
+
+补充规则：
+
+- 如果一个 `<0.5s` 的停顿，前后最近的口播词都已经在 `auto_selected.json` 里，这个停顿也默认删掉
+- 目的不是删除自然停顿，而是避免两个待删口误中间残留一小截空白
+
 ## 步骤 4.5：生成 AI 视频介绍草稿
 
 这一步必须由 Codex 直接完成，不要用本地脚本模板代写。
@@ -226,16 +239,19 @@ node "$SKILL_DIR/scripts/review_server.js" 8899 "$VIDEO_PATH"
 ### 剪辑边界保留
 
 审核页执行剪辑时，默认不会把用户选中的时间段原样整块切掉，而是会尽量在删除段前后各保留一点边界内容，减少“词尾被吞掉”的情况。
+同时会自动补偿审核音频的时间轴偏移，并使用保时长的音频接缝淡化，避免导出后出现轻微音画不同步。
 
 默认参数来自 skill 根目录 `.env`：
 
 - `CUT_KEEP_PADDING_MS=500`
 - `CUT_MIN_DELETE_MS=120`
+- `CROSSFADE_MS=30`
 
 含义：
 
 - `CUT_KEEP_PADDING_MS`：删除段前后尽量各保留多少毫秒，默认 `500ms`
 - `CUT_MIN_DELETE_MS`：即使做了边界保留，也至少还要删掉多少毫秒，默认 `120ms`
+- `CROSSFADE_MS`：拼接处音频淡化时长，默认 `30ms`；只做音量淡化，不会缩短总时长
 
 如果用户反馈剪完之后句尾还是容易被吞掉，可以把：
 

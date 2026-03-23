@@ -57,8 +57,8 @@ function parseMs(value, fallback) {
 function buildAdjustedDeleteSegments(deleteSegs, options) {
   const adjusted = [];
   for (const seg of deleteSegs) {
-    const rawStart = Math.max(0, seg.start);
-    const rawEnd = Math.min(options.duration, seg.end);
+    const rawStart = Math.max(0, seg.start - options.audioOffset);
+    const rawEnd = Math.min(options.duration, seg.end - options.audioOffset);
     const rawDuration = Math.max(0, rawEnd - rawStart);
     if (rawDuration <= 0) continue;
 
@@ -72,6 +72,54 @@ function buildAdjustedDeleteSegments(deleteSegs, options) {
     }
   }
   return adjusted;
+}
+
+function findAudioReferencePath() {
+  const deleteDir = path.dirname(path.resolve(DELETE_JSON));
+  const candidates = [
+    path.join(deleteDir, 'audio.mp3'),
+    path.join(process.cwd(), 'audio.mp3'),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function probeMediaStartTime(mediaPath) {
+  try {
+    const output = execSync(
+      `ffprobe -v error -show_entries format=start_time -of csv=p=0 "${fileArg(mediaPath)}"`,
+      { encoding: 'utf8' }
+    ).trim();
+    return parseFloat(output) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function buildAudioFilter(seg, index, totalSegments, fadeSec) {
+  const segDuration = Math.max(0, seg.end - seg.start);
+  const maxFadeSec = Math.max(0, segDuration / 2 - 0.001);
+  const effectiveFadeSec = Math.min(fadeSec, maxFadeSec);
+
+  let filter = `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS`;
+
+  if (effectiveFadeSec > 0 && totalSegments > 1) {
+    if (index > 0) {
+      filter += `,afade=t=in:st=0:d=${effectiveFadeSec.toFixed(3)}`;
+    }
+    if (index < totalSegments - 1) {
+      const fadeOutStart = Math.max(0, segDuration - effectiveFadeSec);
+      filter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${effectiveFadeSec.toFixed(3)}`;
+    }
+  }
+
+  return `${filter}[a${index}]`;
 }
 
 // 获取视频时长
@@ -91,14 +139,21 @@ const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
 const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
 const crossfadeSec = CROSSFADE_MS / 1000;
 
-console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频crossfade=${CROSSFADE_MS}ms`);
+console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
 
 // 读取并处理删除片段
 const deleteSegs = JSON.parse(fs.readFileSync(DELETE_JSON, 'utf8'));
 deleteSegs.sort((a, b) => a.start - b.start);
 
+const audioReference = findAudioReferencePath();
+const audioOffset = audioReference ? probeMediaStartTime(audioReference) : 0;
+if (audioReference && audioOffset > 0) {
+  console.log(`🔧 检测到审核音频偏移: ${audioOffset.toFixed(3)}s，导出时自动补偿`);
+}
+
 // 收缩删除范围，尽量多保留边界附近的正常文字
 const adjustedSegs = buildAdjustedDeleteSegments(deleteSegs, {
+  audioOffset,
   duration,
   expandSec,
   keepPaddingSec,
@@ -147,7 +202,7 @@ const aLabels = [];
 for (let i = 0; i < keepSegs.length; i++) {
   const seg = keepSegs[i];
   filters.push(`[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`);
-  filters.push(`[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
+  filters.push(buildAudioFilter(seg, i, keepSegs.length, crossfadeSec));
   vconcat += `[v${i}]`;
   aLabels.push(`a${i}`);
 }
@@ -157,13 +212,7 @@ filters.push(`${vconcat}concat=n=${keepSegs.length}:v=1:a=0[outv]`);
 if (keepSegs.length === 1) {
   filters.push('[a0]anull[outa]');
 } else {
-  let currentLabel = 'a0';
-  for (let i = 1; i < keepSegs.length; i++) {
-    const nextLabel = `a${i}`;
-    const outLabel = (i === keepSegs.length - 1) ? 'outa' : `amid${i}`;
-    filters.push(`[${currentLabel}][${nextLabel}]acrossfade=d=${crossfadeSec.toFixed(3)}:c1=tri:c2=tri[${outLabel}]`);
-    currentLabel = outLabel;
-  }
+  filters.push(`${aLabels.map(label => `[${label}]`).join('')}concat=n=${keepSegs.length}:v=0:a=1[outa]`);
 }
 
 const filterCmd = filters.join(';');
