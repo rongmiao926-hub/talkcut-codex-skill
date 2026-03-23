@@ -1,0 +1,8 @@
+interface:
+  display_name: "Videocut"
+  short_description: "本地剪口播、审核口误并生成字幕的 Codex skill"
+  default_prompt: "使用 $videocut，帮我安装环境或处理一段口播视频。"
+
+policy:
+  allow_implicit_invocation: true
+
