@@ -14,6 +14,8 @@
 
 - 不要因为当前机器能装 `mlx-whisper`，就直接替用户选 `whisper`
 - 不要跳过优缺点说明
+- 如果用户要配火山引擎，或者当前 `VOLCENGINE_API_KEY` 为空，必须把下面这个详细说明地址直接发给用户，而不是只说“去控制台看”：
+  `https://my.feishu.cn/wiki/Gh0MwxHePidsYfkIx7zcvJQynqc?from=from_copylink`
 - 初始化结束后，要把用户最终选择写回 `.env`
 
 ## 依赖
@@ -91,6 +93,16 @@ winget install Gyan.FFmpeg
 2. 开通语音识别相关服务
 3. 获取 API Key
 4. 把 key 填进 `.env` 的 `VOLCENGINE_API_KEY`
+
+首次配置时，建议直接这样发给用户：
+
+```text
+如果你要走火山引擎，这里是 API Key 的详细获取说明：
+https://my.feishu.cn/wiki/Gh0MwxHePidsYfkIx7zcvJQynqc?from=from_copylink
+
+控制台入口：
+https://console.volcengine.com/speech/new/experience/asr?projectName=default
+```
 
 写入 `.env`：
 
