@@ -34,8 +34,14 @@ mkdir -p "$BASE_DIR/1_转录" "$BASE_DIR/2_分析" "$BASE_DIR/3_审核"
 
 ```bash
 cd "$BASE_DIR/1_转录"
-ffmpeg -i "$VIDEO_PATH" -vn -acodec libmp3lame -y audio.mp3
+node "$SKILL_DIR/scripts/extract_review_audio.js" "$VIDEO_PATH" audio.wav audio_timeline.json
 ```
+
+说明：
+
+- 这里生成的是和视频时间轴对齐的 `audio.wav`
+- 同时会写出 `audio_timeline.json`
+- 后续 Whisper 转录和审核页都基于这份对齐音频，避免不同视频的音频起点差异把切点带偏
 
 ## 步骤 2：转录
 
@@ -68,7 +74,7 @@ node "$SKILL_DIR/scripts/generate_subtitles.js" volcengine_result.json
 ### 方案 B：Whisper
 
 ```bash
-python3 "$SKILL_DIR/scripts/whisper_transcribe.py" audio.mp3
+python3 "$SKILL_DIR/scripts/whisper_transcribe.py" audio.wav
 ```
 
 直接得到：
@@ -158,6 +164,7 @@ require('fs').writeFileSync('auto_selected.json', JSON.stringify(selected, null,
 - 先分句，再比对
 - 残句和重复句默认整句删除
 - 静音索引必须保留，不能被 AI 结果覆盖
+- 长静音在 `subtitles_words.json` 中按整段保留，不再拆成多个 `1.0s` gap
 - 最终 `auto_selected.json` 必须是去重、升序的数组
 
 AI 补完索引后，再执行一次规范化，补上“夹在两个待删片段之间的小停顿”：
@@ -197,13 +204,14 @@ cd "$BASE_DIR/3_审核"
 node "$SKILL_DIR/scripts/generate_review.js" \
   "../1_转录/subtitles_words.json" \
   "../2_分析/auto_selected.json" \
-  "../1_转录/audio.mp3"
+  "../1_转录/audio.wav"
 ```
 
 产出：
 
 - `review.html`
-- `audio.mp3`
+- `audio.wav`
+- `audio_timeline.json`
 
 ## 步骤 6：启动审核服务
 

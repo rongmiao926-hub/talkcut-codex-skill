@@ -3,7 +3,7 @@
  * 生成审核网页（wavesurfer.js 版本）
  *
  * 用法: node generate_review.js <subtitles_words.json> [auto_selected.json] [audio_file]
- * 输出: review.html, audio.mp3（复制到当前目录）
+ * 输出: review.html, audio.*（复制到当前目录）
  */
 
 const fs = require('fs');
@@ -12,13 +12,20 @@ const { normalizeSelectedIndices } = require('./auto_selected_utils');
 
 const subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
-const audioFile = process.argv[4] || 'audio.mp3';
+const audioFile = process.argv[4] || 'audio.wav';
 
 // 复制音频文件到当前目录（避免相对路径问题）
-const audioBaseName = 'audio.mp3';
+const inputAudioExt = path.extname(audioFile) || '.wav';
+const audioBaseName = `audio${inputAudioExt}`;
 if (audioFile !== audioBaseName && fs.existsSync(audioFile)) {
   fs.copyFileSync(audioFile, audioBaseName);
   console.log('📁 已复制音频到当前目录:', audioBaseName);
+}
+
+const timelineMetadataSource = path.join(path.dirname(audioFile), 'audio_timeline.json');
+if (fs.existsSync(timelineMetadataSource)) {
+  fs.copyFileSync(timelineMetadataSource, 'audio_timeline.json');
+  console.log('📁 已复制时间轴元数据到当前目录: audio_timeline.json');
 }
 
 if (!fs.existsSync(subtitlesFile)) {

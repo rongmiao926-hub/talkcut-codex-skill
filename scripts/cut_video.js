@@ -57,8 +57,8 @@ function parseMs(value, fallback) {
 function buildAdjustedDeleteSegments(deleteSegs, options) {
   const adjusted = [];
   for (const seg of deleteSegs) {
-    const rawStart = Math.max(0, seg.start - options.audioOffset);
-    const rawEnd = Math.min(options.duration, seg.end - options.audioOffset);
+    const rawStart = Math.max(0, seg.start + options.timelineOffsetSec);
+    const rawEnd = Math.min(options.duration, seg.end + options.timelineOffsetSec);
     const rawDuration = Math.max(0, rawEnd - rawStart);
     if (rawDuration <= 0) continue;
 
@@ -77,8 +77,10 @@ function buildAdjustedDeleteSegments(deleteSegs, options) {
 function findAudioReferencePath() {
   const deleteDir = path.dirname(path.resolve(DELETE_JSON));
   const candidates = [
+    path.join(deleteDir, 'audio.wav'),
     path.join(deleteDir, 'audio.mp3'),
     path.join(process.cwd(), 'audio.mp3'),
+    path.join(process.cwd(), 'audio.wav'),
   ];
 
   for (const candidate of candidates) {
@@ -90,10 +92,44 @@ function findAudioReferencePath() {
   return null;
 }
 
+function readTimelineMetadata() {
+  const deleteDir = path.dirname(path.resolve(DELETE_JSON));
+  const candidates = [
+    path.join(deleteDir, 'audio_timeline.json'),
+    path.join(process.cwd(), 'audio_timeline.json'),
+  ];
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (Number.isFinite(parsed.timelineOffsetSec)) {
+        return parsed;
+      }
+    } catch (e) {
+      // ignore malformed metadata and fall back to probing
+    }
+  }
+
+  return null;
+}
+
 function probeMediaStartTime(mediaPath) {
   try {
     const output = execSync(
       `ffprobe -v error -show_entries format=start_time -of csv=p=0 "${fileArg(mediaPath)}"`,
+      { encoding: 'utf8' }
+    ).trim();
+    return parseFloat(output) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function probeSourceAudioStartTime(inputPath) {
+  try {
+    const output = execSync(
+      `ffprobe -v error -select_streams a:0 -show_entries stream=start_time -of csv=p=0 "${fileArg(inputPath)}"`,
       { encoding: 'utf8' }
     ).trim();
     return parseFloat(output) || 0;
@@ -146,14 +182,21 @@ const deleteSegs = JSON.parse(fs.readFileSync(DELETE_JSON, 'utf8'));
 deleteSegs.sort((a, b) => a.start - b.start);
 
 const audioReference = findAudioReferencePath();
-const audioOffset = audioReference ? probeMediaStartTime(audioReference) : 0;
-if (audioReference && audioOffset > 0) {
-  console.log(`🔧 检测到审核音频偏移: ${audioOffset.toFixed(3)}s，导出时自动补偿`);
+const timelineMetadata = readTimelineMetadata();
+const reviewAudioStartSec = audioReference ? probeMediaStartTime(audioReference) : 0;
+const sourceAudioStartSec = probeSourceAudioStartTime(INPUT);
+const timelineOffsetSec = timelineMetadata
+  ? Number(timelineMetadata.timelineOffsetSec) || 0
+  : sourceAudioStartSec - reviewAudioStartSec;
+if (timelineMetadata) {
+  console.log(`🔧 已读取时间轴元数据，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
+} else if (audioReference) {
+  console.log(`🔧 审核音频起点=${reviewAudioStartSec.toFixed(3)}s，源视频音频起点=${sourceAudioStartSec.toFixed(3)}s，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
 }
 
 // 收缩删除范围，尽量多保留边界附近的正常文字
 const adjustedSegs = buildAdjustedDeleteSegments(deleteSegs, {
-  audioOffset,
+  timelineOffsetSec,
   duration,
   expandSec,
   keepPaddingSec,

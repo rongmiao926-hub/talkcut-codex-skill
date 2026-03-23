@@ -51,6 +51,27 @@ function readEnvConfig() {
   return config;
 }
 
+function readTimelineMetadata() {
+  const candidates = [
+    path.resolve('audio_timeline.json'),
+    path.join(__dirname, '..', 'audio_timeline.json'),
+  ];
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (Number.isFinite(parsed.timelineOffsetSec)) {
+        return parsed;
+      }
+    } catch (e) {
+      // ignore malformed metadata and fall back to probing
+    }
+  }
+
+  return null;
+}
+
 function parseMs(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -85,8 +106,8 @@ function getRuntimeInfo(videoFile) {
 function buildAdjustedDeleteSegments(deleteList, options) {
   const adjusted = [];
   for (const seg of deleteList) {
-    const rawStart = Math.max(0, seg.start - options.audioOffset);
-    const rawEnd = Math.min(options.duration, seg.end - options.audioOffset);
+    const rawStart = Math.max(0, seg.start + options.timelineOffsetSec);
+    const rawEnd = Math.min(options.duration, seg.end + options.timelineOffsetSec);
     const rawDuration = Math.max(0, rawEnd - rawStart);
     if (rawDuration <= 0) continue;
 
@@ -100,6 +121,18 @@ function buildAdjustedDeleteSegments(deleteList, options) {
     }
   }
   return adjusted;
+}
+
+function probeSourceAudioStartTime(inputPath) {
+  try {
+    const output = execSync(
+      `ffprobe -v error -select_streams a:0 -show_entries stream=start_time -of csv=p=0 "${fileArg(inputPath)}"`,
+      { encoding: 'utf8' }
+    ).trim();
+    return parseFloat(output) || 0;
+  } catch (e) {
+    return 0;
+  }
 }
 
 function buildAudioFilter(seg, index, totalSegments, fadeSec) {
@@ -128,6 +161,7 @@ const MIME_TYPES = {
   '.css': 'text/css',
   '.json': 'application/json',
   '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
   '.mp4': 'video/mp4',
 };
 
@@ -294,7 +328,7 @@ const server = http.createServer((req, res) => {
   const stat = fs.statSync(filePath);
 
   // 支持 Range 请求（音频/视频拖动）
-  if (req.headers.range && (ext === '.mp3' || ext === '.mp4')) {
+  if (req.headers.range && (ext === '.mp3' || ext === '.wav' || ext === '.mp4')) {
     const range = req.headers.range.replace('bytes=', '').split('-');
     const start = parseInt(range[0], 10);
     const end = range[1] ? parseInt(range[1], 10) : stat.size - 1;
@@ -377,16 +411,24 @@ function executeFFmpegCut(input, deleteList, output) {
 
   console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
 
-  // 检测音频偏移量（audio.mp3 的 start_time）
-  let audioOffset = 0;
+  // 检测审核音频和源视频音频的时间轴映射
+  const timelineMetadata = readTimelineMetadata();
+  let reviewAudioStartSec = 0;
   try {
-    const offsetCmd = `ffprobe -v error -show_entries format=start_time -of csv=p=0 audio.mp3`;
-    audioOffset = parseFloat(execSync(offsetCmd).toString().trim()) || 0;
-    if (audioOffset > 0) {
-      console.log(`🔧 检测到音频偏移: ${audioOffset.toFixed(3)}s，自动补偿`);
-    }
+    const reviewAudioFile = fs.existsSync('audio.wav') ? 'audio.wav' : 'audio.mp3';
+    const offsetCmd = `ffprobe -v error -show_entries format=start_time -of csv=p=0 ${reviewAudioFile}`;
+    reviewAudioStartSec = parseFloat(execSync(offsetCmd).toString().trim()) || 0;
   } catch (e) {
     // 忽略，使用默认 0
+  }
+  const sourceAudioStartSec = probeSourceAudioStartTime(input);
+  const timelineOffsetSec = timelineMetadata
+    ? Number(timelineMetadata.timelineOffsetSec) || 0
+    : sourceAudioStartSec - reviewAudioStartSec;
+  if (timelineMetadata) {
+    console.log(`🔧 已读取时间轴元数据，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
+  } else {
+    console.log(`🔧 审核音频起点=${reviewAudioStartSec.toFixed(3)}s，源视频音频起点=${sourceAudioStartSec.toFixed(3)}s，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
   }
 
   // 获取视频总时长
@@ -401,7 +443,7 @@ function executeFFmpegCut(input, deleteList, output) {
 
   // 补偿偏移 + 收缩删除范围，尽量多保留边界附近的正常文字
   const expandedDelete = buildAdjustedDeleteSegments(deleteList, {
-    audioOffset,
+    timelineOffsetSec,
     duration,
     expandSec,
     keepPaddingSec,
