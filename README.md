@@ -19,6 +19,12 @@
 
 > 只需 3 步，10 分钟视频通常几分钟内就能处理完。
 
+说明：
+
+- `TalkCut` 是这个项目的名字
+- `$videocut` 是你在 Codex 里实际调用它时用的 skill 名
+- 所以下面凡是“你要对 Codex 说的话”，我都会统一写成 `使用 $videocut，...`
+
 ## 核心功能
 
 | 问题 | TalkCut 怎么处理 |
@@ -78,7 +84,7 @@ https://github.com/rongmiao926-hub/talkcut-codex-skill
 然后直接告诉 Codex：
 
 ```text
-请把 talkcut-codex-skill-main 文件夹移动到 ~/.codex/skills/videocut
+使用 $videocut，请把 talkcut-codex-skill-main 文件夹移动到 ~/.codex/skills/videocut
 ```
 
 Codex 可以帮你：
@@ -94,7 +100,7 @@ Codex 可以帮你：
 如果你已经安装了 Git，也可以直接告诉 Codex：
 
 ```text
-请用 Git 克隆 talkcut-codex-skill 仓库到 ~/.codex/skills/videocut
+使用 $videocut，请用 Git 克隆 https://github.com/rongmiao926-hub/talkcut-codex-skill.git 到 ~/.codex/skills/videocut
 ```
 
 或者你手动执行：
@@ -139,15 +145,6 @@ Codex 会自动：
 
 ---
 
-## 跨平台支持
-
-TalkCut 当前对 macOS、Windows 和 Linux 都做了兼容处理：
-
-- 跨平台核心脚本以 Node.js 为主
-- FFmpeg 路径和文件路径处理兼容不同操作系统
-- macOS 优先 VideoToolbox，Windows 自动识别 NVENC / QSV / AMF，Linux 支持相应硬件编码器或回退软件编码
-- Whisper 本地模型是唯一例外，只支持 Apple Silicon
-
 ## 第四步：开始使用
 
 ### 剪辑口播视频
@@ -166,12 +163,15 @@ TalkCut 当前对 macOS、Windows 和 Linux 都做了兼容处理：
 使用 $videocut，给我的视频添加字幕
 ```
 
-### 记住你的偏好
+### 触发自进化（记住你的偏好）
+
+这一步说的就是上面提到的“自进化”。
+它不是自动学习，而是你明确告诉 Codex：把某条经验正式写回 TalkCut 的规则文件。
 
 告诉 Codex：
 
 ```text
-使用 $videocut，记住我的剪辑偏好
+使用 $videocut，记住这个规则：小于 0.5 秒的停顿，如果前后都是待删片段，也默认删掉
 ```
 
 比如：
@@ -179,15 +179,6 @@ TalkCut 当前对 macOS、Windows 和 Linux 都做了兼容处理：
 - “静音阈值改成 1 秒”
 - “保留适量‘嗯’作为过渡”
 - “如果两个待删片段中间只有很短停顿，也一起删掉”
-
-## 重要提醒
-
-> TalkCut 更像一个会剪辑的 AI 助手。
->
-> 你只需要：
-> 1. 告诉它：“帮我剪这个视频”
-> 2. 在网页上点点鼠标确认一下
-> 3. 它就帮你剪好了
 
 ## 词典与自进化
 
@@ -340,19 +331,19 @@ GitHub
 1. 查看词典位置：
 
 ```text
-videocut 词典文件在哪里？
+使用 $videocut，词典文件在哪里？
 ```
 
 2. 查看用户习惯目录：
 
 ```text
-videocut 用户习惯文件在哪里？
+使用 $videocut，用户习惯文件在哪里？
 ```
 
 3. 查看所有配置文件：
 
 ```text
-videocut 的配置文件有哪些？
+使用 $videocut，这个 skill 的配置文件有哪些？
 ```
 
 ### 编辑文件的步骤
@@ -360,13 +351,13 @@ videocut 的配置文件有哪些？
 1. 让 Codex 帮你打开或修改文件：
 
 ```text
-请在 videocut 词典里添加这些词：Claude Code、AI 剪辑、口播技巧
+使用 $videocut，请在词典里添加这些词：Claude Code、AI 剪辑、口播技巧
 ```
 
 2. 如果你想改规则，也可以直接说：
 
 ```text
-请把“两个待删片段中间的小停顿也默认删掉”写进 videocut 规则
+使用 $videocut，请把“两个待删片段中间的小停顿也默认删掉”写进规则
 ```
 
 ### 常用文件位置速查
