@@ -84,7 +84,6 @@ const html = `<!DOCTYPE html>
     .btn:hover { opacity: .85; }
     .btn-play { background: #2563eb; color: #fff; }
     .btn-cut  { background: #111; color: #fff; }
-    .btn-notes { background: #ea580c; color: #fff; }
     .btn-clear {
       background: #fff;
       color: #999;
@@ -418,17 +417,15 @@ const html = `<!DOCTYPE html>
   <div class="show-notes-panel">
     <div class="show-notes-header">
       <div>
-        <div class="show-notes-title">小红书正文草稿</div>
-        <div class="show-notes-subtitle">这部分正文应由 Codex 在主流程里用 AI 生成，这里只负责查看、编辑、保存和复制。</div>
+        <div class="show-notes-title">视频介绍草稿</div>
+        <div class="show-notes-subtitle">这部分内容由 Codex 在主流程里生成，这里只负责查看和复制。</div>
       </div>
       <div class="show-notes-actions">
-        <button class="btn btn-notes" onclick="loadShowNotes()">读取 AI 正文</button>
-        <button class="btn btn-copy" onclick="saveShowNotes()">保存正文</button>
-        <button class="btn btn-copy" onclick="copyShowNotes()">复制正文</button>
+        <button class="btn btn-copy" onclick="copyShowNotes()">复制视频介绍</button>
       </div>
     </div>
-    <div class="show-notes-status" id="showNotesStatus">页面会自动尝试读取已生成的 AI 正文草稿。</div>
-    <textarea id="showNotesOutput" class="show-notes-output" placeholder="如果这里为空，说明这次流程还没有生成 AI 正文草稿。"></textarea>
+    <div class="show-notes-status" id="showNotesStatus">页面会自动尝试读取已生成的视频介绍草稿。</div>
+    <textarea id="showNotesOutput" class="show-notes-output" placeholder="如果这里为空，说明这次流程还没有生成 AI 视频介绍草稿。" readonly></textarea>
   </div>
 
   <!-- 页脚署名 -->
@@ -665,49 +662,28 @@ const html = `<!DOCTYPE html>
     }
 
     async function loadShowNotes() {
-      showNotesStatus.textContent = '正在读取 AI 正文草稿...';
+      showNotesStatus.textContent = '正在读取 AI 视频介绍草稿...';
       try {
         const res = await fetch('/api/show-notes');
         const data = await res.json();
         if (!data.success) {
-          throw new Error(data.error || '正文读取失败');
+          throw new Error(data.error || '视频介绍草稿读取失败');
         }
         showNotesOutput.value = data.text;
-        showNotesStatus.textContent = '已读取 AI 正文草稿：' + data.output;
+        showNotesStatus.textContent = '已读取 AI 视频介绍草稿：' + data.output;
       } catch (err) {
         showNotesStatus.textContent = err.message;
-      }
-    }
-
-    async function saveShowNotes() {
-      const text = showNotesOutput.value.trim();
-      if (!text) {
-        alert('正文为空，无法保存');
-        return;
-      }
-      showNotesStatus.textContent = '正在保存正文草稿...';
-      try {
-        const res = await fetch('/api/show-notes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || '保存失败');
-        showNotesStatus.textContent = '已保存到 ' + data.output;
-      } catch (err) {
-        showNotesStatus.textContent = '保存失败：' + err.message;
       }
     }
 
     function copyShowNotes() {
       const text = showNotesOutput.value.trim();
       if (!text) {
-        alert('先读取或填写正文草稿');
+        alert('当前还没有可复制的视频介绍草稿');
         return;
       }
       navigator.clipboard.writeText(text).then(() => {
-        showNotesStatus.textContent = '正文草稿已复制到剪贴板';
+        showNotesStatus.textContent = '视频介绍草稿已复制到剪贴板';
       }).catch(err => {
         showNotesStatus.textContent = '复制失败：' + err.message;
       });

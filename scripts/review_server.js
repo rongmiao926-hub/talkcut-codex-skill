@@ -5,7 +5,7 @@
  * 功能：
  * 1. 提供静态文件服务（review.html, audio.mp3）
  * 2. POST /api/cut - 接收删除列表，执行剪辑
- * 3. GET/POST /api/show-notes - 读取或保存 AI 生成的发布正文草稿
+ * 3. GET/POST /api/show-notes - 读取或保存 AI 生成的视频介绍草稿
  *
  * 用法: node review_server.js [port] [video_file]
  * 默认: port=8899, video_file=自动检测目录下的 .mp4
@@ -50,15 +50,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // API: 读取 AI 正文草稿
+  // API: 读取 AI 视频介绍草稿
   if (req.method === 'GET' && req.url === '/api/show-notes') {
     try {
-      const outputFile = 'show_notes_xiaohongshu.md';
+      const outputFile = '视频介绍草稿.md';
       if (!fs.existsSync(outputFile)) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: false,
-          error: '当前目录还没有 AI 生成的小红书正文草稿，请先在 Codex 主流程里生成。',
+          error: '当前目录还没有 AI 生成的视频介绍草稿，请先在 Codex 主流程里生成。',
         }));
         return;
       }
@@ -71,14 +71,14 @@ const server = http.createServer((req, res) => {
         text,
       }));
     } catch (err) {
-      console.error('❌ 读取正文失败:', err.message);
+      console.error('❌ 读取视频介绍草稿失败:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: err.message }));
     }
     return;
   }
 
-  // API: 保存 AI 正文草稿
+  // API: 保存 AI 视频介绍草稿
   if (req.method === 'POST' && req.url === '/api/show-notes') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -86,14 +86,14 @@ const server = http.createServer((req, res) => {
       try {
         const payload = JSON.parse(body || '{}');
         const text = String(payload.text || '').trim();
-        const outputFile = 'show_notes_xiaohongshu.md';
+        const outputFile = '视频介绍草稿.md';
 
         if (!text) {
-          throw new Error('正文内容为空，无法保存');
+          throw new Error('视频介绍草稿内容为空，无法保存');
         }
 
         fs.writeFileSync(outputFile, text, 'utf8');
-        console.log(`📝 已保存正文草稿: ${outputFile}`);
+        console.log(`📝 已保存视频介绍草稿: ${outputFile}`);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -101,7 +101,7 @@ const server = http.createServer((req, res) => {
           output: outputFile,
         }));
       } catch (err) {
-        console.error('❌ 正文保存失败:', err.message);
+        console.error('❌ 视频介绍草稿保存失败:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: err.message }));
       }

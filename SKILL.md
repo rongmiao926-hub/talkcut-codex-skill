@@ -13,7 +13,7 @@ description: Use when the user wants to install or run the local AI-assisted tal
 - 转录口播视频并生成网页审核页
 - 在审核页里根据人工确认执行剪辑
 - 生成、校对、烧录字幕
-- 在审核页里生成发布正文草稿
+- 在审核页里生成视频介绍草稿
 - 记录新的审核规则和用户偏好
 
 优先复用本 skill 自带脚本，不要临时重写整条处理链路，除非用户明确要求。
@@ -22,7 +22,7 @@ description: Use when the user wants to install or run the local AI-assisted tal
 
 - 安装、初始化、修环境问题：读 [references/install.md](references/install.md)
 - 剪口播：先读 [references/cut-workflow.md](references/cut-workflow.md)，再读 `references/user-habits/` 下全部规则文件
-- 写小红书正文草稿：读 [references/show-notes.md](references/show-notes.md)
+- 写视频介绍草稿：读 [references/show-notes.md](references/show-notes.md)
 - 加字幕、校对字幕、烧录字幕：读 [references/subtitle-workflow.md](references/subtitle-workflow.md)
 - 用户要求“记住这个问题”“更新规则”：读 [references/self-improve.md](references/self-improve.md)
 
@@ -36,7 +36,7 @@ description: Use when the user wants to install or run the local AI-assisted tal
 - 如果 `DEFAULT_OUTPUT_DIR` 为空且用户这次不是在做初始化，优先询问用户；如果没有明确要求，默认放到源视频同级的 `output/` 目录。
 - 如果用户在做首次安装或初始化，必须明确介绍 `volcengine` 和 `whisper` 的优缺点，然后让用户二选一；不要因为本机装了 `mlx-whisper` 就直接默认选 `whisper`。
 - 如果用户选择火山引擎，必须给出 API Key 获取入口和图文指南，再写入 `VOLCENGINE_API_KEY` 与 `ASR_ENGINE=volcengine`。
-- 剪口播主流程默认停在网页审核页和正文草稿，不要在用户进入审核页之前就直接产出 `*_cut.mp4`。
+- 剪口播主流程默认停在网页审核页和视频介绍草稿，不要在用户进入审核页之前就直接产出 `*_cut.mp4`。
 - 成片只能由用户在审核页里点击 `执行剪辑` 按钮触发；不要在终端里替用户预先调用这一步。
 - 启动本地审核服务后，要明确告诉用户访问 URL、当前输出目录和已生成文件。
 - 只有在目标文件真实写到磁盘后，才能向用户汇报成功。

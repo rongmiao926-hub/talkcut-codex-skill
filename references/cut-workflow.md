@@ -160,22 +160,22 @@ require('fs').writeFileSync('auto_selected.json', JSON.stringify(selected, null,
 - 静音索引必须保留，不能被 AI 结果覆盖
 - 最终 `auto_selected.json` 必须是去重、升序的数组
 
-## 步骤 4.5：生成 AI 小红书正文草稿
+## 步骤 4.5：生成 AI 视频介绍草稿
 
 这一步必须由 Codex 直接完成，不要用本地脚本模板代写。
 
 按 [show-notes.md](show-notes.md) 的要求，基于当前准备保留的内容生成：
 
 ```text
-../3_审核/show_notes_xiaohongshu.md
+../3_审核/视频介绍草稿.md
 ```
 
 要求：
 
-- 风格像创作者自己发小红书
+- 风格像创作者自己会配在视频旁边发出的介绍文案
 - 默认包含标题、正文、标签、内容摘要
 - 如果当前稿子明显还是半成品，正文也要跟着真实，不要编造视频里没讲过的内容
-- 如果用户后续在审核页大改删减，允许用户手工编辑这份草稿
+- 审核页里默认只展示和复制这份草稿，不依赖用户在页面里手工保存
 
 ## 步骤 5：生成审核页
 
@@ -218,14 +218,14 @@ node "$SKILL_DIR/scripts/review_server.js" 8899 "$VIDEO_PATH"
 - `delete_segments.json`
 - `*_cut.mp4`
 
-审核页里会自动读取已有的 AI 正文草稿，用户可以继续编辑并保存：
+审核页里会自动读取已有的 AI 视频介绍草稿，用户可以直接复制：
 
-- `show_notes_xiaohongshu.md`
+- `视频介绍草稿.md`
 
 ## 执行后的检查
 
 - `1_转录/subtitles_words.json` 存在
 - `2_分析/auto_selected.json` 存在
 - `3_审核/review.html` 存在
-- 如已生成正文，`3_审核/show_notes_xiaohongshu.md` 存在
+- 如已生成视频介绍草稿，`3_审核/视频介绍草稿.md` 存在
 - 只有用户在审核页里手动执行过剪辑时，`3_审核/*_cut.mp4` 才应存在
