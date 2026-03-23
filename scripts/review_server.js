@@ -29,6 +29,49 @@ function findVideoFile() {
   return files[0] || 'source.mp4';
 }
 
+function readEnvConfig() {
+  const envFile = path.join(__dirname, '..', '.env');
+  const config = {};
+  if (!fs.existsSync(envFile)) return config;
+
+  const content = fs.readFileSync(envFile, 'utf8');
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const idx = line.indexOf('=');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    config[key] = value;
+  }
+  return config;
+}
+
+function parseMs(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function buildAdjustedDeleteSegments(deleteList, options) {
+  const adjusted = [];
+  for (const seg of deleteList) {
+    const rawStart = Math.max(0, seg.start - options.audioOffset);
+    const rawEnd = Math.min(options.duration, seg.end - options.audioOffset);
+    const rawDuration = Math.max(0, rawEnd - rawStart);
+    if (rawDuration <= 0) continue;
+
+    const maxKeepSec = Math.max(0, (rawDuration - options.minDeleteSec) / 2);
+    const effectiveKeepSec = Math.min(options.keepPaddingSec, maxKeepSec);
+    const start = Math.max(0, rawStart + effectiveKeepSec - options.expandSec);
+    const end = Math.min(options.duration, rawEnd - effectiveKeepSec + options.expandSec);
+
+    if (end > start) {
+      adjusted.push({ start, end });
+    }
+  }
+  return adjusted;
+}
+
 const MIME_TYPES = {
   '.html': 'text/html',
   '.js': 'application/javascript',
@@ -262,10 +305,13 @@ function getEncoder() {
 // 内置 FFmpeg 剪辑逻辑（filter_complex 精确剪辑 + buffer + crossfade）
 function executeFFmpegCut(input, deleteList, output) {
   // 配置参数
-  const BUFFER_MS = 50;     // 删除范围前后各扩展 50ms（吃掉气口和残音）
-  const CROSSFADE_MS = 30;  // 音频淡入淡出 30ms
+  const envConfig = readEnvConfig();
+  const CUT_EXPAND_MS = parseMs(envConfig.CUT_EXPAND_MS, 0);
+  const CUT_KEEP_PADDING_MS = parseMs(envConfig.CUT_KEEP_PADDING_MS, 500);
+  const CUT_MIN_DELETE_MS = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
+  const CROSSFADE_MS = parseMs(envConfig.CROSSFADE_MS, 30);
 
-  console.log(`⚙️ 优化参数: 扩展范围=${BUFFER_MS}ms, 音频crossfade=${CROSSFADE_MS}ms`);
+  console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频crossfade=${CROSSFADE_MS}ms`);
 
   // 检测音频偏移量（audio.mp3 的 start_time）
   let audioOffset = 0;
@@ -284,16 +330,23 @@ function executeFFmpegCut(input, deleteList, output) {
 
   const duration = parseFloat(execSync(probeCmd).toString().trim());
 
-  const bufferSec = BUFFER_MS / 1000;
+  const expandSec = CUT_EXPAND_MS / 1000;
+  const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
+  const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
   const crossfadeSec = CROSSFADE_MS / 1000;
 
-  // 补偿偏移 + 扩展删除范围（前后各加 buffer）
-  const expandedDelete = deleteList
-    .map(seg => ({
-      start: Math.max(0, seg.start - audioOffset - bufferSec),
-      end: Math.min(duration, seg.end - audioOffset + bufferSec)
-    }))
-    .sort((a, b) => a.start - b.start);
+  // 补偿偏移 + 收缩删除范围，尽量多保留边界附近的正常文字
+  const expandedDelete = buildAdjustedDeleteSegments(deleteList, {
+    audioOffset,
+    duration,
+    expandSec,
+    keepPaddingSec,
+    minDeleteSec,
+  }).sort((a, b) => a.start - b.start);
+
+  if (expandedDelete.length === 0 && deleteList.length > 0) {
+    console.log('⚠️ 当前删除片段都很短，按保留策略收缩后没有可执行的删除范围');
+  }
 
   // 合并重叠的删除段
   const mergedDelete = [];

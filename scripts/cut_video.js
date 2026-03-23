@@ -31,6 +31,49 @@ function fileArg(p) {
   return process.platform === 'win32' ? p : `file:${p}`;
 }
 
+function readEnvConfig() {
+  const envFile = path.join(__dirname, '..', '.env');
+  const config = {};
+  if (!fs.existsSync(envFile)) return config;
+
+  const content = fs.readFileSync(envFile, 'utf8');
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const idx = line.indexOf('=');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    config[key] = value;
+  }
+  return config;
+}
+
+function parseMs(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function buildAdjustedDeleteSegments(deleteSegs, options) {
+  const adjusted = [];
+  for (const seg of deleteSegs) {
+    const rawStart = Math.max(0, seg.start);
+    const rawEnd = Math.min(options.duration, seg.end);
+    const rawDuration = Math.max(0, rawEnd - rawStart);
+    if (rawDuration <= 0) continue;
+
+    const maxKeepSec = Math.max(0, (rawDuration - options.minDeleteSec) / 2);
+    const effectiveKeepSec = Math.min(options.keepPaddingSec, maxKeepSec);
+    const start = Math.max(0, rawStart + effectiveKeepSec - options.expandSec);
+    const end = Math.min(options.duration, rawEnd - effectiveKeepSec + options.expandSec);
+
+    if (end > start) {
+      adjusted.push({ start, end });
+    }
+  }
+  return adjusted;
+}
+
 // 获取视频时长
 const duration = parseFloat(
   execSync(`ffprobe -v error -show_entries format=duration -of csv=p=0 "${fileArg(INPUT)}"`, { encoding: 'utf8' }).trim()
@@ -38,26 +81,37 @@ const duration = parseFloat(
 console.log(`📹 视频时长: ${duration}s`);
 
 // 配置参数
-const BUFFER_MS = 50;
-const CROSSFADE_MS = 30;
-const bufferSec = BUFFER_MS / 1000;
+const envConfig = readEnvConfig();
+const CUT_EXPAND_MS = parseMs(envConfig.CUT_EXPAND_MS, 0);
+const CUT_KEEP_PADDING_MS = parseMs(envConfig.CUT_KEEP_PADDING_MS, 500);
+const CUT_MIN_DELETE_MS = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
+const CROSSFADE_MS = parseMs(envConfig.CROSSFADE_MS, 30);
+const expandSec = CUT_EXPAND_MS / 1000;
+const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
+const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
 const crossfadeSec = CROSSFADE_MS / 1000;
 
-console.log(`⚙️ 优化参数: 扩展范围=${BUFFER_MS}ms, 音频crossfade=${CROSSFADE_MS}ms`);
+console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频crossfade=${CROSSFADE_MS}ms`);
 
 // 读取并处理删除片段
 const deleteSegs = JSON.parse(fs.readFileSync(DELETE_JSON, 'utf8'));
 deleteSegs.sort((a, b) => a.start - b.start);
 
-// 扩展删除范围
-const expandedSegs = deleteSegs.map(seg => ({
-  start: Math.max(0, seg.start - bufferSec),
-  end: Math.min(duration, seg.end + bufferSec)
-}));
+// 收缩删除范围，尽量多保留边界附近的正常文字
+const adjustedSegs = buildAdjustedDeleteSegments(deleteSegs, {
+  duration,
+  expandSec,
+  keepPaddingSec,
+  minDeleteSec,
+});
+
+if (adjustedSegs.length === 0 && deleteSegs.length > 0) {
+  console.log('⚠️ 当前删除片段都很短，按保留策略收缩后没有可执行的删除范围');
+}
 
 // 合并重叠的删除段
 const mergedSegs = [];
-for (const seg of expandedSegs) {
+for (const seg of adjustedSegs) {
   if (mergedSegs.length === 0 || seg.start > mergedSegs[mergedSegs.length - 1].end) {
     mergedSegs.push({ ...seg });
   } else {

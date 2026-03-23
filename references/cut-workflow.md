@@ -218,6 +218,26 @@ node "$SKILL_DIR/scripts/review_server.js" 8899 "$VIDEO_PATH"
 - `delete_segments.json`
 - `*_cut.mp4`
 
+### 剪辑边界保留
+
+审核页执行剪辑时，默认不会把用户选中的时间段原样整块切掉，而是会尽量在删除段前后各保留一点边界内容，减少“词尾被吞掉”的情况。
+
+默认参数来自 skill 根目录 `.env`：
+
+- `CUT_KEEP_PADDING_MS=500`
+- `CUT_MIN_DELETE_MS=120`
+
+含义：
+
+- `CUT_KEEP_PADDING_MS`：删除段前后尽量各保留多少毫秒，默认 `500ms`
+- `CUT_MIN_DELETE_MS`：即使做了边界保留，也至少还要删掉多少毫秒，默认 `120ms`
+
+如果用户反馈剪完之后句尾还是容易被吞掉，可以把：
+
+- `CUT_KEEP_PADDING_MS=1000`
+
+改成 `1000ms` 再试。
+
 审核页里会自动读取已有的 AI 视频介绍草稿，用户可以直接复制：
 
 - `视频介绍草稿.md`
