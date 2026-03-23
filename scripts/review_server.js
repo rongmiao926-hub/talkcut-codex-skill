@@ -161,6 +161,7 @@ const MIME_TYPES = {
   '.css': 'text/css',
   '.json': 'application/json',
   '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
   '.wav': 'audio/wav',
   '.mp4': 'video/mp4',
 };
@@ -328,7 +329,7 @@ const server = http.createServer((req, res) => {
   const stat = fs.statSync(filePath);
 
   // 支持 Range 请求（音频/视频拖动）
-  if (req.headers.range && (ext === '.mp3' || ext === '.wav' || ext === '.mp4')) {
+  if (req.headers.range && (ext === '.mp3' || ext === '.m4a' || ext === '.wav' || ext === '.mp4')) {
     const range = req.headers.range.replace('bytes=', '').split('-');
     const start = parseInt(range[0], 10);
     const end = range[1] ? parseInt(range[1], 10) : stat.size - 1;
@@ -405,7 +406,7 @@ function executeFFmpegCut(input, deleteList, output) {
   // 配置参数
   const envConfig = readEnvConfig();
   const CUT_EXPAND_MS = parseMs(envConfig.CUT_EXPAND_MS, 0);
-  const CUT_KEEP_PADDING_MS = parseMs(envConfig.CUT_KEEP_PADDING_MS, 500);
+  const CUT_KEEP_PADDING_MS = parseMs(envConfig.CUT_KEEP_PADDING_MS, 0);
   const CUT_MIN_DELETE_MS = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
   const CROSSFADE_MS = parseMs(envConfig.CROSSFADE_MS, 30);
 
@@ -508,7 +509,7 @@ function executeFFmpegCut(input, deleteList, output) {
   const encoder = getEncoder();
   console.log(`✂️ 执行 FFmpeg 精确剪辑（${encoder.label}）...`);
 
-  const cmd = `ffmpeg -y -i "${fileArg(input)}" -filter_complex "${filterComplex}" -map "[outv]" -map "[outa]" -c:v ${encoder.name} ${encoder.args} -c:a aac -b:a 192k "${fileArg(output)}"`;
+  const cmd = `ffmpeg -y -i "${fileArg(input)}" -filter_complex "${filterComplex}" -map "[outv]" -map "[outa]" -c:v ${encoder.name} ${encoder.args} -pix_fmt yuv420p -movflags +faststart -c:a aac -ar 48000 -b:a 192k "${fileArg(output)}"`;
 
   try {
     execSync(cmd, { stdio: 'pipe' });

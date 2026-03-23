@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
 
 const subtitlesFile = process.argv[2] || 'subtitles_words.json';
@@ -20,6 +21,30 @@ const audioBaseName = `audio${inputAudioExt}`;
 if (audioFile !== audioBaseName && fs.existsSync(audioFile)) {
   fs.copyFileSync(audioFile, audioBaseName);
   console.log('📁 已复制音频到当前目录:', audioBaseName);
+}
+
+let reviewAudioBaseName = audioBaseName;
+if (audioBaseName.endsWith('.wav') && fs.existsSync(audioBaseName)) {
+  const reviewPreviewName = 'audio_preview.m4a';
+  const sourceMtime = fs.statSync(audioBaseName).mtimeMs;
+  const previewExists = fs.existsSync(reviewPreviewName);
+  const previewIsFresh = previewExists && fs.statSync(reviewPreviewName).mtimeMs >= sourceMtime;
+
+  if (!previewIsFresh) {
+    try {
+      execSync(
+        `ffmpeg -y -i "${audioBaseName}" -c:a aac -b:a 192k "${reviewPreviewName}"`,
+        { stdio: 'pipe' }
+      );
+      console.log('🎧 已生成审核预览音频:', reviewPreviewName);
+    } catch (err) {
+      console.warn('⚠️ 生成审核预览音频失败，将回退到原始音频播放');
+    }
+  }
+
+  if (fs.existsSync(reviewPreviewName)) {
+    reviewAudioBaseName = reviewPreviewName;
+  }
 }
 
 const timelineMetadataSource = path.join(path.dirname(audioFile), 'audio_timeline.json');
@@ -503,7 +528,7 @@ const html = `<!DOCTYPE html>
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
-      url: '${audioBaseName}'
+      url: '${reviewAudioBaseName}'
     });
 
     const timeDisplay = document.getElementById('time');
