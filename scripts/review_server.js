@@ -52,6 +52,17 @@ function parseMs(value, fallback) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function getCutOutputDir(videoFile) {
+  const envConfig = readEnvConfig();
+  const configuredOutputDir = String(envConfig.DEFAULT_OUTPUT_DIR || '').trim();
+  if (configuredOutputDir) {
+    return path.resolve(configuredOutputDir);
+  }
+
+  const sourceDir = path.dirname(path.resolve(videoFile));
+  return path.join(sourceDir, 'output');
+}
+
 function buildAdjustedDeleteSegments(deleteList, options) {
   const adjusted = [];
   for (const seg of deleteList) {
@@ -164,9 +175,12 @@ const server = http.createServer((req, res) => {
         fs.writeFileSync('delete_segments.json', JSON.stringify(deleteList, null, 2));
         console.log(`📝 保存 ${deleteList.length} 个删除片段`);
 
-        // 生成输出文件名
+        // 成片 MP4 直接输出到默认输出目录根下
         const baseName = path.parse(VIDEO_FILE).name;
-        const outputFile = `${baseName}_cut.mp4`;
+        const cutOutputDir = getCutOutputDir(VIDEO_FILE);
+        fs.mkdirSync(cutOutputDir, { recursive: true });
+        const outputFile = path.join(cutOutputDir, `${baseName}_cut.mp4`);
+        console.log(`📦 成片输出目录: ${cutOutputDir}`);
 
         // 执行剪辑：优先用 cut_video.js，其次 cut_video.sh，最后内置逻辑
         const jsScriptPath = path.join(__dirname, 'cut_video.js');

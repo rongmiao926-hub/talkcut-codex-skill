@@ -216,7 +216,7 @@ node "$SKILL_DIR/scripts/review_server.js" 8899 "$VIDEO_PATH"
 只有当用户在页面上点“执行剪辑”后，才会生成：
 
 - `delete_segments.json`
-- `*_cut.mp4`
+- `{OUTPUT_ROOT}/*_cut.mp4`
 
 ### 剪辑边界保留
 
@@ -248,4 +248,9 @@ node "$SKILL_DIR/scripts/review_server.js" 8899 "$VIDEO_PATH"
 - `2_分析/auto_selected.json` 存在
 - `3_审核/review.html` 存在
 - 如已生成视频介绍草稿，`3_审核/视频介绍草稿.md` 存在
-- 只有用户在审核页里手动执行过剪辑时，`3_审核/*_cut.mp4` 才应存在
+- 只有用户在审核页里手动执行过剪辑时，`{OUTPUT_ROOT}/*_cut.mp4` 才应存在
+
+补充规则：
+
+- 审核页里的中间文件继续保留在 `3_审核/`
+- 但最终成片 `*_cut.mp4` 不放在 `3_审核/`，而是直接放到 `OUTPUT_ROOT` 根目录

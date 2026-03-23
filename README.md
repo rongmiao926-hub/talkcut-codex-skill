@@ -160,6 +160,8 @@ git clone https://github.com/rongmiao926-hub/talkcut-codex-skill.git ~/.codex/sk
 
 如果没有配置 `DEFAULT_OUTPUT_DIR`，默认会放到源视频同级的 `output/` 目录。
 
+最终剪好的成片 `*_cut.mp4` 会直接放在 `DEFAULT_OUTPUT_DIR` 根目录，不会继续放在 `3_审核/` 里面；审核页、删除列表、视频介绍草稿这些中间文件仍然保留原来的嵌套目录。
+
 ## 常见问题
 
 ### Q: 可以在 Windows 上用吗？

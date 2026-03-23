@@ -56,6 +56,11 @@ description: Use when the user wants to install or run the local AI-assisted tal
     └── 3_输出/
 ```
 
+补充：
+
+- 审核页、中间文件、分析结果继续放在上述嵌套目录里
+- 最终成片 `*_cut.mp4` 直接放在 `DEFAULT_OUTPUT_DIR` 根目录；如果未配置，则放在源视频同级的 `output/` 根目录
+
 ## 资源位置
 
 - 转录与剪辑脚本：`scripts/`
