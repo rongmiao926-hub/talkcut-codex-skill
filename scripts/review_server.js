@@ -24,13 +24,17 @@ function fileArg(p) {
   return process.platform === 'win32' ? p : `file:${p}`;
 }
 
+function getEnvFilePath() {
+  return path.join(__dirname, '..', '.env');
+}
+
 function findVideoFile() {
   const files = fs.readdirSync('.').filter(f => ['.mp4', '.mov', '.m4v'].includes(path.extname(f).toLowerCase()));
   return files[0] || 'source.mp4';
 }
 
 function readEnvConfig() {
-  const envFile = path.join(__dirname, '..', '.env');
+  const envFile = getEnvFilePath();
   const config = {};
   if (!fs.existsSync(envFile)) return config;
 
@@ -52,15 +56,30 @@ function parseMs(value, fallback) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-function getCutOutputDir(videoFile) {
+function getRuntimeInfo(videoFile) {
   const envConfig = readEnvConfig();
   const configuredOutputDir = String(envConfig.DEFAULT_OUTPUT_DIR || '').trim();
+  const resolvedVideoFile = path.resolve(videoFile);
+
   if (configuredOutputDir) {
-    return path.resolve(configuredOutputDir);
+    return {
+      cutOutputDir: path.resolve(configuredOutputDir),
+      videoFile: resolvedVideoFile,
+      envFile: getEnvFilePath(),
+      usesConfiguredOutputDir: true,
+      outputSourceText: `已读取 DEFAULT_OUTPUT_DIR：${path.resolve(configuredOutputDir)}`,
+    };
   }
 
-  const sourceDir = path.dirname(path.resolve(videoFile));
-  return path.join(sourceDir, 'output');
+  const sourceDir = path.dirname(resolvedVideoFile);
+  const fallbackOutputDir = path.join(sourceDir, 'output');
+  return {
+    cutOutputDir: fallbackOutputDir,
+    videoFile: resolvedVideoFile,
+    envFile: getEnvFilePath(),
+    usesConfiguredOutputDir: false,
+    outputSourceText: '当前 DEFAULT_OUTPUT_DIR 为空，已回退到源视频同级的 output/ 目录。',
+  };
 }
 
 function buildAdjustedDeleteSegments(deleteList, options) {
@@ -101,6 +120,16 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(200);
     res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/api/runtime-info') {
+    const runtimeInfo = getRuntimeInfo(VIDEO_FILE);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      ...runtimeInfo,
+    }));
     return;
   }
 
@@ -177,10 +206,10 @@ const server = http.createServer((req, res) => {
 
         // 成片 MP4 直接输出到默认输出目录根下
         const baseName = path.parse(VIDEO_FILE).name;
-        const cutOutputDir = getCutOutputDir(VIDEO_FILE);
-        fs.mkdirSync(cutOutputDir, { recursive: true });
-        const outputFile = path.join(cutOutputDir, `${baseName}_cut.mp4`);
-        console.log(`📦 成片输出目录: ${cutOutputDir}`);
+        const runtimeInfo = getRuntimeInfo(VIDEO_FILE);
+        fs.mkdirSync(runtimeInfo.cutOutputDir, { recursive: true });
+        const outputFile = path.join(runtimeInfo.cutOutputDir, `${baseName}_cut.mp4`);
+        console.log(`📦 成片输出目录: ${runtimeInfo.cutOutputDir}`);
 
         // 执行剪辑：优先用 cut_video.js，其次 cut_video.sh，最后内置逻辑
         const jsScriptPath = path.join(__dirname, 'cut_video.js');
@@ -211,6 +240,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
           success: true,
           output: outputFile,
+          outputDir: runtimeInfo.cutOutputDir,
           originalDuration: originalDuration.toFixed(2),
           newDuration: newDuration.toFixed(2),
           deletedDuration: deletedDuration.toFixed(2),
@@ -468,10 +498,13 @@ function executeFFmpegCutFallback(input, keepSegments, output) {
 }
 
 server.listen(PORT, () => {
+  const runtimeInfo = getRuntimeInfo(VIDEO_FILE);
   console.log(`
 🎬 审核服务器已启动
 📍 地址: http://localhost:${PORT}
 📹 视频: ${VIDEO_FILE}
+📦 成片输出目录: ${runtimeInfo.cutOutputDir}
+⚙️ 输出目录来源: ${runtimeInfo.outputSourceText}
 
 操作说明:
 1. 在网页中审核选择要删除的片段

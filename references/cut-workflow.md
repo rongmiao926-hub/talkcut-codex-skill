@@ -205,6 +205,11 @@ node "$SKILL_DIR/scripts/review_server.js" 8899 "$VIDEO_PATH"
 
 - `http://localhost:8899`
 
+并明确告诉用户：
+
+- 当前实际成片输出目录
+- 这个目录是来自 `DEFAULT_OUTPUT_DIR`，还是因为未配置而回退到源视频同级 `output/`
+
 到这一步为止，Codex 主流程就应该停住，不要在终端里继续帮用户直接出成片。
 
 硬规则：

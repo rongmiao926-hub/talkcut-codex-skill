@@ -305,6 +305,38 @@ const html = `<!DOCTYPE html>
       outline: 2px solid #fdba74;
       border-color: #fb923c;
     }
+    .output-dir-panel {
+      margin-top: 16px;
+      padding: 14px 16px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+    }
+    .output-dir-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .output-dir-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #111827;
+    }
+    .output-dir-value {
+      margin-top: 6px;
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      color: #374151;
+      word-break: break-all;
+    }
+    .output-dir-status {
+      margin-top: 6px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #6b7280;
+    }
 
     /* ── 页脚署名 ── */
     .footer-credit {
@@ -391,6 +423,17 @@ const html = `<!DOCTYPE html>
     </div>
   </div>
 
+  <div class="output-dir-panel">
+    <div class="output-dir-header">
+      <div>
+        <div class="output-dir-title">本次成片输出目录</div>
+        <div class="output-dir-value" id="outputDirValue">正在读取...</div>
+        <div class="output-dir-status" id="outputDirStatus">页面会自动读取当前实际输出目录。</div>
+      </div>
+      <button class="btn btn-copy" onclick="copyOutputDir()">复制目录</button>
+    </div>
+  </div>
+
   <!-- 统计 + 图例 + 清空 -->
   <div class="stats-bar">
     <span id="stats">已选择 0 个，共 0.00s</span>
@@ -455,7 +498,10 @@ const html = `<!DOCTYPE html>
     const statsDiv = document.getElementById('stats');
     const showNotesStatus = document.getElementById('showNotesStatus');
     const showNotesOutput = document.getElementById('showNotesOutput');
+    const outputDirValue = document.getElementById('outputDirValue');
+    const outputDirStatus = document.getElementById('outputDirStatus');
     let elements = [];
+    let runtimeInfo = null;
 
     // ── 拖动选择状态 ──
     let isDragging = false;
@@ -671,6 +717,36 @@ const html = `<!DOCTYPE html>
       updateStats();
     }
 
+    async function loadRuntimeInfo() {
+      outputDirStatus.textContent = '正在读取当前实际输出目录...';
+      try {
+        const res = await fetch('/api/runtime-info');
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error('输出目录读取失败');
+        }
+        runtimeInfo = data;
+        outputDirValue.textContent = data.cutOutputDir;
+        outputDirStatus.textContent = data.outputSourceText;
+      } catch (err) {
+        outputDirValue.textContent = '当前无法读取';
+        outputDirStatus.textContent = err.message;
+      }
+    }
+
+    function copyOutputDir() {
+      const text = runtimeInfo?.cutOutputDir || outputDirValue.textContent.trim();
+      if (!text || text === '当前无法读取') {
+        alert('当前还没有可复制的输出目录');
+        return;
+      }
+      navigator.clipboard.writeText(text).then(() => {
+        outputDirStatus.textContent = '输出目录已复制到剪贴板';
+      }).catch(err => {
+        outputDirStatus.textContent = '复制失败：' + err.message;
+      });
+    }
+
     async function loadShowNotes() {
       showNotesStatus.textContent = '正在读取 AI 视频介绍草稿...';
       try {
@@ -742,7 +818,7 @@ const html = `<!DOCTYPE html>
         const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
 
         if (data.success) {
-          alert(\`剪辑完成 (耗时 \${totalTime}s)\\n\\n输出: \${data.output}\\n原时长: \${formatDuration(data.originalDuration)}\\n新时长: \${formatDuration(data.newDuration)}\\n删减: \${formatDuration(data.deletedDuration)} (\${data.savedPercent}%)\`);
+          alert(\`剪辑完成 (耗时 \${totalTime}s)\\n\\n输出目录: \${data.outputDir}\\n输出文件: \${data.output}\\n原时长: \${formatDuration(data.originalDuration)}\\n新时长: \${formatDuration(data.newDuration)}\\n删减: \${formatDuration(data.deletedDuration)} (\${data.savedPercent}%)\`);
         } else {
           alert('剪辑失败: ' + data.error);
         }
@@ -761,6 +837,7 @@ const html = `<!DOCTYPE html>
     });
 
     render();
+    loadRuntimeInfo();
     loadShowNotes();
   </script>
 </body>

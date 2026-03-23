@@ -104,6 +104,8 @@ git clone https://github.com/rongmiao926-hub/talkcut-codex-skill.git ~/.codex/sk
 
 确认无误后，点击页面里的 `执行剪辑`，就会生成剪好的视频。
 
+审核页和终端都会明确显示“本次成片输出目录”，不用再自己回忆默认目录配到了哪里。
+
 ## 工作原理
 
 ```text
