@@ -64,23 +64,31 @@ winget install Gyan.FFmpeg
 
 | 方案 | 优点 | 缺点 | 适用情况 |
 |------|------|------|----------|
-| 火山引擎 API | 速度快，识别通常更稳，全平台可用 | 需要联网，需要 API Key | 想省时间、跨平台、优先稳定性 |
-| Whisper 本地 | 完全免费，不需要云 API | 只适合 Apple Silicon，首次下载模型约 1.5GB，速度通常慢一些 | 不想配 API Key，且本机是 Apple Silicon |
+| 火山引擎 API | 速度快，识别通常更稳；有免费 20 小时额度；同时支持苹果电脑和 Windows 电脑 | 需要联网，需要 API Key | 想省时间、跨平台、优先稳定性 |
+| Whisper 本地 | 完全免费，不需要云 API | 只适合 Apple Silicon；首次下载模型约 1.5GB；速度通常慢一些；Windows 和 Intel Mac 不适用 | 不想配 API Key，且本机是 Apple Silicon |
 
 推荐问法：
 
 ```text
 现在转录方案有两个：
-1. 火山引擎：更快、更稳，需要 API Key
-2. Whisper：本地免费，但通常更慢，只适合 Apple Silicon
+1. 火山引擎：速度更快，识别通常更稳，有免费 20 小时额度，同时支持苹果电脑和 Windows，但需要 API Key
+2. Whisper：本地免费，不需要云 API，但通常更慢，而且只支持苹果 Apple 芯片
 
 你想默认用哪一个？我会把它写进 .env。
 ```
 
 ### 方案 A：火山引擎
 
-优点：速度快，识别准，全平台可用。  
-缺点：需要 API Key。
+优点：
+
+- 速度快，识别通常更稳
+- 有免费 20 小时额度，前期体验成本低
+- 同时支持苹果电脑和 Windows 电脑
+
+缺点：
+
+- 需要联网
+- 需要先配置 API Key
 
 获取 API Key：
 
@@ -113,8 +121,18 @@ ASR_ENGINE=volcengine
 
 ### 方案 B：Whisper 本地
 
-优点：完全免费。  
-缺点：仅 Apple Silicon 可用，首次下载模型约 1.5GB。
+优点：
+
+- 完全免费
+- 不需要云 API Key
+- 音频不需要上传到第三方云端
+
+缺点：
+
+- 仅 Apple Silicon 可用
+- Windows 和 Intel Mac 不适用
+- 首次下载模型约 1.5GB
+- 通常比火山引擎更慢一些
 
 ```bash
 pip3 install mlx-whisper
