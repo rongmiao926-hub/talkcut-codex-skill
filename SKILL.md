@@ -32,7 +32,10 @@ description: Use when the user wants to install or run the local AI-assisted tal
 - 绝不提交 `.env`、API Key、证书或其他敏感信息。
 - 所有脚本和参考文件都按 skill 根目录相对寻址。
 - 有已有日期输出目录就复用，没有再新建。
-- 如果 `DEFAULT_OUTPUT_DIR` 为空，优先询问用户；如果没有明确要求，默认放到源视频同级的 `output/` 目录。
+- 如果用户在做首次安装或初始化，必须先问清楚输出目录要放哪里，再写入 `DEFAULT_OUTPUT_DIR`。
+- 如果 `DEFAULT_OUTPUT_DIR` 为空且用户这次不是在做初始化，优先询问用户；如果没有明确要求，默认放到源视频同级的 `output/` 目录。
+- 如果用户在做首次安装或初始化，必须明确介绍 `volcengine` 和 `whisper` 的优缺点，然后让用户二选一；不要因为本机装了 `mlx-whisper` 就直接默认选 `whisper`。
+- 如果用户选择火山引擎，必须给出 API Key 获取入口和图文指南，再写入 `VOLCENGINE_API_KEY` 与 `ASR_ENGINE=volcengine`。
 - 剪口播主流程默认停在网页审核页和正文草稿，不要在用户进入审核页之前就直接产出 `*_cut.mp4`。
 - 成片只能由用户在审核页里点击 `执行剪辑` 按钮触发；不要在终端里替用户预先调用这一步。
 - 启动本地审核服务后，要明确告诉用户访问 URL、当前输出目录和已生成文件。
