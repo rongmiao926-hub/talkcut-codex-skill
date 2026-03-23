@@ -463,8 +463,9 @@ TalkCut 采用模块化设计，各组件相互独立：
 
 ## 致谢
 
-- 原作：成峰（公众号“AI 产品自由”）的 videocut 思路
-- Claude 版参考仓库：[talkcut-claude-skill](https://github.com/rongmiao926-hub/talkcut-claude-skill)
+- **原作**：成峰（公众号「AI 产品自由」）—— 原始项目 [videocut-skills](https://github.com/Ceeon/videocut-skills)
+- **当前版本完善**：[Dogtor 大王](https://xhslink.com/m/1GxnHJxjrnd)（小红书）
+- **感谢所有贡献者**：让 TalkCut 越来越好用！
 
 ## License
 
