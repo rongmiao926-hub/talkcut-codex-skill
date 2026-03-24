@@ -137,7 +137,7 @@ function buildTempOutputPath(outputPath) {
   const dir = path.dirname(resolved);
   const ext = path.extname(resolved) || '.mp4';
   const base = path.basename(resolved, ext);
-  return path.join(dir, `.${base}.exporting.${process.pid}.${Date.now()}${ext}`);
+  return path.join(dir, `${base}.exporting.${process.pid}.${Date.now()}${ext}`);
 }
 
 function probeMediaInfo(mediaPath) {
@@ -218,6 +218,16 @@ function validateOutputFile(outputPath, expectedDurationSec) {
     duration: formatDuration,
     size: stat.size,
   };
+}
+
+function ensureVisibleInFinder(outputPath) {
+  if (process.platform !== 'darwin') return;
+
+  try {
+    spawnSync('chflags', ['nohidden', path.resolve(outputPath)], { stdio: 'ignore' });
+  } catch (e) {
+    // ignore visibility fix failures; export itself is still valid
+  }
 }
 
 function buildAudioFilter(seg, index, totalSegments, fadeSec) {
@@ -483,6 +493,7 @@ try {
 
   const validated = validateOutputFile(tempOutput, expectedDuration);
   fs.renameSync(tempOutput, path.resolve(OUTPUT));
+  ensureVisibleInFinder(OUTPUT);
   console.log(`✅ 已保存: ${OUTPUT}`);
   console.log(`📹 新时长: ${validated.duration}s`);
   console.log(`📦 文件大小: ${validated.size} bytes`);
