@@ -140,6 +140,52 @@ def strip_suspicious_tail_burst(all_words):
     print(f"🧹 已移除尾部重复幻觉词: {len(suffix)} 个")
     return all_words[:burst_start]
 
+def strip_repeated_tokens(all_words):
+    """移除 Whisper 幻觉：连续相同 token >=5 次，或短循环模式（如 [曾,经] x100）。"""
+    if len(all_words) < 5:
+        return all_words
+
+    remove = set()
+
+    # 1) 连续相同 token >=5 次
+    i = 0
+    while i < len(all_words):
+        token = all_words[i]["text"]
+        j = i + 1
+        while j < len(all_words) and all_words[j]["text"] == token:
+            j += 1
+        run_len = j - i
+        if run_len >= 5:
+            print(f"🧹 幻觉过滤: 移除连续 {run_len} 个「{token}」(idx {i}-{j-1})")
+            for k in range(i, j):
+                remove.add(k)
+        i = j
+
+    # 2) 短循环模式检测（周期 2-3 个 token，重复 >=5 轮）
+    for period in (2, 3):
+        i = 0
+        while i + period * 5 <= len(all_words):
+            pattern = [all_words[i + p]["text"] for p in range(period)]
+            j = i + period
+            while j + period <= len(all_words):
+                match = all(all_words[j + p]["text"] == pattern[p] for p in range(period))
+                if not match:
+                    break
+                j += period
+            repeats = (j - i) // period
+            if repeats >= 5:
+                label = "".join(pattern)
+                print(f"🧹 幻觉过滤: 移除「{label}」x{repeats} (idx {i}-{j-1})")
+                for k in range(i, j):
+                    remove.add(k)
+                i = j
+            else:
+                i += 1
+
+    if not remove:
+        return all_words
+    return [w for idx, w in enumerate(all_words) if idx not in remove]
+
 def to_subtitles_words(result, audio_path):
     """将 whisper 结果转换为 subtitles_words.json 格式。
 
@@ -167,6 +213,7 @@ def to_subtitles_words(result, audio_path):
     raw_word_count = len(all_words)
     all_words = strip_trailing_silence_words(all_words, audio_path)
     all_words = strip_suspicious_tail_burst(all_words)
+    all_words = strip_repeated_tokens(all_words)
 
     if not all_words:
         print("⚠️  清洗尾部幻觉词后没有剩余文字")
