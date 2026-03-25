@@ -15,6 +15,35 @@ const subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
 const audioFile = process.argv[4] || 'audio.wav';
 
+function readEnvConfig() {
+  const envPath = path.join(__dirname, '..', '.env');
+  const config = {};
+  if (!fs.existsSync(envPath)) return config;
+
+  const content = fs.readFileSync(envPath, 'utf8');
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eqIndex = line.indexOf('=');
+    if (eqIndex === -1) continue;
+    const key = line.slice(0, eqIndex).trim();
+    const value = line.slice(eqIndex + 1).trim();
+    config[key] = value;
+  }
+  return config;
+}
+
+function parseMs(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+const envConfig = readEnvConfig();
+const clientPreviewExpandMs = parseMs(envConfig.CUT_EXPAND_MS, 0);
+const clientPreviewKeepPaddingMs = parseMs(envConfig.CUT_KEEP_PADDING_MS, 0);
+const clientPreviewMinDeleteMs = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
+const clientPreviewFadeMs = parseMs(envConfig.CROSSFADE_MS, 30);
+
 // 复制音频文件到当前目录（避免相对路径问题）
 const inputAudioExt = path.extname(audioFile) || '.wav';
 const audioBaseName = `audio${inputAudioExt}`;
@@ -39,16 +68,20 @@ if (fs.existsSync(timelineMetadataSource)) {
     const sourceAudioStartSec = Number(timelineMetadata.sourceAudioStartSec);
     const previewSourceName = 'audio_source.wav';
 
-    if (sourceVideo && Number.isFinite(sourceAudioStartSec) && fs.existsSync(sourceVideo)) {
-      const previewIsFresh = fs.existsSync(previewSourceName)
-        && fs.statSync(previewSourceName).mtimeMs >= fs.statSync(sourceVideo).mtimeMs;
+    if (Number.isFinite(sourceAudioStartSec)) {
+      if (sourceVideo && fs.existsSync(sourceVideo)) {
+        const previewIsFresh = fs.existsSync(previewSourceName)
+          && fs.statSync(previewSourceName).mtimeMs >= fs.statSync(sourceVideo).mtimeMs;
 
-      if (!previewIsFresh) {
-        execSync(
-          `ffmpeg -y -i "${sourceVideo}" -map 0:a:0 -c:a pcm_s16le "${previewSourceName}"`,
-          { stdio: 'pipe' }
-        );
-        console.log('🎧 已生成源音轨预览音频:', previewSourceName);
+        if (!previewIsFresh) {
+          execSync(
+            `ffmpeg -y -i "${sourceVideo}" -map 0:a:0 -c:a pcm_s16le "${previewSourceName}"`,
+            { stdio: 'pipe' }
+          );
+          console.log('🎧 已生成源音轨预览音频:', previewSourceName);
+        }
+      } else if (fs.existsSync(previewSourceName)) {
+        console.log('🎧 源视频路径已变化，继续复用当前目录里的源音轨预览音频:', previewSourceName);
       }
 
       if (fs.existsSync(previewSourceName)) {
@@ -130,6 +163,7 @@ const html = `<!DOCTYPE html>
     .btn:hover { opacity: .85; }
     .btn-play { background: #2563eb; color: #fff; }
     .btn-cut  { background: #111; color: #fff; }
+    .btn-preview { background: #ea580c; color: #fff; }
     .btn-clear {
       background: #fff;
       color: #999;
@@ -158,6 +192,20 @@ const html = `<!DOCTYPE html>
     .native-audio {
       width: 100%;
       margin: 10px 0 0;
+    }
+    .preview-status {
+      margin-top: 10px;
+      min-height: 20px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #6b7280;
+    }
+    .preview-status.busy {
+      color: #ea580c;
+    }
+    .btn-preview:disabled {
+      opacity: 0.65;
+      cursor: wait;
     }
     #waveform {
       background: #fff;
@@ -448,8 +496,8 @@ const html = `<!DOCTYPE html>
   <!-- 顶部播放器 -->
   <div class="player">
     <div class="player-row">
-      <button class="btn btn-play" onclick="wavesurfer.playPause()">播放 / 暂停</button>
-      <select id="speed" onchange="wavesurfer.setPlaybackRate(parseFloat(this.value))">
+      <button class="btn btn-play" onclick="togglePrimaryPlayback()">播放 / 暂停</button>
+      <select id="speed" onchange="setPlaybackRate(parseFloat(this.value))">
         <option value="0.5">0.5x</option>
         <option value="0.75">0.75x</option>
         <option value="1" selected>1x</option>
@@ -457,10 +505,12 @@ const html = `<!DOCTYPE html>
         <option value="1.5">1.5x</option>
         <option value="2">2x</option>
       </select>
+      <button class="btn btn-preview" id="previewRefreshBtn" onclick="forceRefreshPreview()">刷新试听</button>
       <span class="time-display" id="time">00:00 / 00:00</span>
       <button class="btn btn-cut" onclick="executeCut()">执行剪辑</button>
     </div>
-    <audio id="nativeAudio" class="native-audio" controls preload="metadata" src="${previewAudioBaseName}"></audio>
+    <audio id="previewAudio" class="native-audio" preload="metadata" src="${previewAudioBaseName}" style="display:none"></audio>
+    <div class="preview-status" id="previewStatus" style="display:none">正在准备默认剪后试听...</div>
     <div id="waveform"></div>
     <div class="help-section">
       <div class="help-title">操作说明</div>
@@ -469,7 +519,7 @@ const html = `<!DOCTYPE html>
         <li><strong>拖动</strong>鼠标：框选一段文字，松开后批量选中（再次拖动已选中的区域可取消）</li>
         <li><strong>双击</strong>文字：选中或取消单个字</li>
         <li>键盘快捷键：<kbd>空格</kbd> 播放/暂停，<kbd>←</kbd><kbd>→</kbd> 前后跳 1 秒，<kbd>Shift</kbd>+方向键跳 5 秒</li>
-        <li>默认使用源视频主音轨做试听，WaveSurfer 只负责波形和定位</li>
+        <li>默认播放的是直接跳播的剪后试听模拟；你改完删除选择后，页面会自动刷新，必要时也可以手动点「刷新试听」</li>
       </ul>
     </div>
   </div>
@@ -531,13 +581,32 @@ const html = `<!DOCTYPE html>
     const words = ${JSON.stringify(words)};
     const autoSelected = new Set(${JSON.stringify(autoSelected)});
     const selected = new Set(autoSelected);
-    const nativeAudio = document.getElementById('nativeAudio');
+    const previewAudio = document.getElementById('previewAudio');
+    const previewStatus = document.getElementById('previewStatus');
+    const previewRefreshBtn = document.getElementById('previewRefreshBtn');
     const previewAudioOffsetSec = ${JSON.stringify(previewAudioOffsetSec)};
+    const fallbackPreviewAudioSrc = ${JSON.stringify(previewAudioBaseName)};
+    const clientPreviewExpandSec = ${JSON.stringify(clientPreviewExpandMs / 1000)};
+    const clientPreviewKeepPaddingSec = ${JSON.stringify(clientPreviewKeepPaddingMs / 1000)};
+    const clientPreviewMinDeleteSec = ${JSON.stringify(clientPreviewMinDeleteMs / 1000)};
+    const clientPreviewFadeSec = ${JSON.stringify(clientPreviewFadeMs / 1000)};
+    let renderedPreviewSignature = '';
+    let previewSegments = [];
+    let previewRenderTimer = null;
+    let previewRenderSeq = 0;
+    let previewRenderInFlight = false;
+    let pendingPreviewAutoplay = false;
+    let pendingTimelineSeek = null;
+    let lastWaveCursorTime = -1;
+    let previewObjectUrl = '';
+    let sourceAudioBuffer = null;
+    let sourceAudioBufferPromise = null;
+    let previewAudioContext = null;
 
     const wavesurfer = WaveSurfer.create({
       container: '#waveform',
       backend: 'MediaElement',
-      media: nativeAudio,
+      media: previewAudio,
       waveColor: '#c4c9d4',
       progressColor: '#2563eb',
       cursorColor: '#f59e0b',
@@ -565,12 +634,87 @@ const html = `<!DOCTYPE html>
     let dragPreviewSet = new Set();
     let suppressAutoScrollUntil = 0;
 
-    function timelineToPreviewTime(sec) {
+    function timelineToSourceTime(sec) {
       return Math.max(0, sec - previewAudioOffsetSec);
     }
 
-    function previewToTimelineTime(sec) {
+    function sourceToTimelineTime(sec) {
       return sec + previewAudioOffsetSec;
+    }
+
+    function getSourceDuration() {
+      if (Number.isFinite(previewAudio.duration) && previewAudio.duration > 0) {
+        return previewAudio.duration;
+      }
+      const waveDuration = wavesurfer.getDuration();
+      return Number.isFinite(waveDuration) ? waveDuration : 0;
+    }
+
+    function buildFallbackPreviewSegments() {
+      const duration = getSourceDuration();
+      if (!(duration > 0)) return [];
+      return [{
+        previewStart: 0,
+        previewEnd: duration,
+        timelineStart: sourceToTimelineTime(0),
+        timelineEnd: sourceToTimelineTime(duration),
+      }];
+    }
+
+    function getActivePreviewSegments() {
+      return previewSegments.length > 0 ? previewSegments : buildFallbackPreviewSegments();
+    }
+
+    function previewToTimelineTime(sec) {
+      const segments = getActivePreviewSegments();
+      if (segments.length === 0) {
+        return sourceToTimelineTime(sec);
+      }
+
+      for (const seg of segments) {
+        if (sec >= seg.previewStart && sec < seg.previewEnd) {
+          return seg.timelineStart + (sec - seg.previewStart);
+        }
+      }
+
+      if (sec <= 0) return segments[0].timelineStart;
+      const last = segments[segments.length - 1];
+      if (sec >= last.previewEnd) return last.timelineEnd;
+
+      for (let i = 0; i < segments.length - 1; i++) {
+        if (sec < segments[i + 1].previewStart) {
+          return segments[i].timelineEnd;
+        }
+      }
+
+      return sourceToTimelineTime(sec);
+    }
+
+    function timelineToPreviewTime(sec) {
+      const segments = getActivePreviewSegments();
+      if (segments.length === 0) {
+        return timelineToSourceTime(sec);
+      }
+
+      for (const seg of segments) {
+        if (sec >= seg.timelineStart && sec <= seg.timelineEnd) {
+          return seg.previewStart + Math.max(0, sec - seg.timelineStart);
+        }
+        if (sec < seg.timelineStart) {
+          return seg.previewStart;
+        }
+      }
+
+      return segments[segments.length - 1].previewEnd;
+    }
+
+    function previewIsFresh() {
+      return JSON.stringify(getMergedSelectedSegments()) === renderedPreviewSignature;
+    }
+
+    function setPreviewStatus(text, busy = false) {
+      previewStatus.textContent = text;
+      previewStatus.classList.toggle('busy', busy);
     }
 
     function formatTime(sec) {
@@ -673,7 +817,7 @@ const html = `<!DOCTYPE html>
       if (!dragMoved) {
         // 没有移动 = 单击 → 跳转播放
         suppressAutoScroll();
-        wavesurfer.setTime(timelineToPreviewTime(words[dragStartIdx].start));
+        seekPreviewToTimeline(words[dragStartIdx].start);
       } else {
         // 有移动 = 拖动 → 批量选中/取消
         const min = Math.min(dragStartIdx, endIdx);
@@ -706,16 +850,16 @@ const html = `<!DOCTYPE html>
       let totalDuration = 0;
       selected.forEach(i => { totalDuration += words[i].end - words[i].start; });
       statsDiv.textContent = \`已选择 \${selected.size} 个，共 \${totalDuration.toFixed(2)}s\`;
+      const currentTimelineTime = previewToTimelineTime(previewAudio.currentTime || 0);
+      const shouldResume = !previewAudio.paused;
+      if (shouldResume) previewAudio.pause();
+      schedulePreviewRender({ seekTime: currentTimelineTime, autoplay: shouldResume });
     }
 
-    // ── 播放跟踪 ──
-    wavesurfer.on('timeupdate', (rawTime) => {
-      const t = previewToTimelineTime(rawTime);
-      const allowAutoScroll = wavesurfer.isPlaying() && Date.now() >= suppressAutoScrollUntil;
-      timeDisplay.textContent = \`\${formatTime(t)} / \${formatTime(previewToTimelineTime(wavesurfer.getDuration()))}\`;
+    function updateCurrentWordState(timelineTime, allowAutoScroll) {
       elements.forEach((el, i) => {
         const w = words[i];
-        if (t >= w.start && t < w.end) {
+        if (timelineTime >= w.start && timelineTime < w.end) {
           if (!el.classList.contains('current')) {
             el.classList.add('current');
             if (allowAutoScroll) {
@@ -726,7 +870,24 @@ const html = `<!DOCTYPE html>
           el.classList.remove('current');
         }
       });
-    });
+    }
+
+    function syncWaveCursor(timelineTime) {
+      return;
+    }
+
+    function updatePlaybackUI() {
+      const currentPreviewTime = previewAudio.currentTime || 0;
+      const totalPreviewTime = Number.isFinite(previewAudio.duration) && previewAudio.duration > 0
+        ? previewAudio.duration
+        : (getActivePreviewSegments().at(-1)?.previewEnd || 0);
+      const timelineTime = previewToTimelineTime(currentPreviewTime);
+      const allowAutoScroll = !previewAudio.paused && Date.now() >= suppressAutoScrollUntil;
+
+      timeDisplay.textContent = \`\${formatTime(currentPreviewTime)} / \${formatTime(totalPreviewTime)}\`;
+      updateCurrentWordState(timelineTime, allowAutoScroll);
+      syncWaveCursor(timelineTime);
+    }
 
     function copyDeleteList() {
       const merged = getMergedSelectedSegments();
@@ -755,6 +916,410 @@ const html = `<!DOCTYPE html>
         }
       }
       return merged;
+    }
+
+    function getJumpSkipTarget(timelineTime) {
+      const segments = getMergedSelectedSegments();
+      for (const seg of segments) {
+        if (timelineTime >= seg.start && timelineTime < seg.end) {
+          return seg.end;
+        }
+      }
+      return null;
+    }
+
+    function skipSelectedDuringPreview() {
+      if (previewRenderInFlight) return false;
+
+      const currentPreviewTime = previewAudio.currentTime || 0;
+      const timelineTime = previewToTimelineTime(currentPreviewTime);
+      const skipTarget = getJumpSkipTarget(timelineTime);
+      if (skipTarget === null) return false;
+
+      const epsilon = 0.01;
+      const nextPreviewTime = timelineToPreviewTime(skipTarget + epsilon);
+      if (!(nextPreviewTime > currentPreviewTime + 0.002)) return false;
+
+      previewAudio.currentTime = nextPreviewTime;
+      updatePlaybackUI();
+      return true;
+    }
+
+    function ensurePreviewAudioContext() {
+      if (previewAudioContext) return previewAudioContext;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) {
+        throw new Error('当前浏览器不支持 Web Audio，无法本地拼接试听。');
+      }
+      previewAudioContext = new Ctx();
+      return previewAudioContext;
+    }
+
+    async function decodeAudioDataCompat(ctx, arrayBuffer) {
+      const cloned = arrayBuffer.slice(0);
+      if (ctx.decodeAudioData.length >= 2) {
+        return new Promise((resolve, reject) => {
+          ctx.decodeAudioData(cloned, resolve, reject);
+        });
+      }
+      return ctx.decodeAudioData(cloned);
+    }
+
+    async function ensureSourceAudioBuffer() {
+      if (sourceAudioBuffer) return sourceAudioBuffer;
+      if (sourceAudioBufferPromise) return sourceAudioBufferPromise;
+
+      sourceAudioBufferPromise = (async () => {
+        setPreviewStatus('正在读取源音频并准备本地拼接...', true);
+        const res = await fetch(fallbackPreviewAudioSrc);
+        if (!res.ok) {
+          throw new Error('源音频读取失败：' + res.status);
+        }
+        const arrayBuffer = await res.arrayBuffer();
+        const ctx = ensurePreviewAudioContext();
+        const decoded = await decodeAudioDataCompat(ctx, arrayBuffer);
+        sourceAudioBuffer = decoded;
+        return decoded;
+      })();
+
+      try {
+        return await sourceAudioBufferPromise;
+      } finally {
+        sourceAudioBufferPromise = null;
+      }
+    }
+
+    function revokePreviewObjectUrl() {
+      if (!previewObjectUrl) return;
+      URL.revokeObjectURL(previewObjectUrl);
+      previewObjectUrl = '';
+    }
+
+    function buildAdjustedDeleteSegmentsClient(deleteList, options) {
+      const adjusted = [];
+      for (const seg of deleteList) {
+        const rawStart = Math.max(0, seg.start + options.timelineOffsetSec);
+        const rawEnd = Math.min(options.duration, seg.end + options.timelineOffsetSec);
+        const rawDuration = Math.max(0, rawEnd - rawStart);
+        if (rawDuration <= 0) continue;
+
+        const maxKeepSec = Math.max(0, (rawDuration - options.minDeleteSec) / 2);
+        const effectiveKeepSec = Math.min(options.keepPaddingSec, maxKeepSec);
+        const start = Math.max(0, rawStart + effectiveKeepSec - options.expandSec);
+        const end = Math.min(options.duration, rawEnd - effectiveKeepSec + options.expandSec);
+
+        if (end > start) {
+          adjusted.push({ start, end });
+        }
+      }
+      return adjusted;
+    }
+
+    function mergeDeleteSegmentsClient(segments) {
+      const merged = [];
+      for (const seg of segments) {
+        if (merged.length === 0 || seg.start > merged[merged.length - 1].end) {
+          merged.push({ ...seg });
+        } else {
+          merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, seg.end);
+        }
+      }
+      return merged;
+    }
+
+    function buildKeepSegmentsClient(mergedDelete, duration) {
+      const keepSegments = [];
+      let cursor = 0;
+
+      for (const del of mergedDelete) {
+        if (del.start > cursor) {
+          keepSegments.push({ start: cursor, end: del.start });
+        }
+        cursor = del.end;
+      }
+
+      if (cursor < duration) {
+        keepSegments.push({ start: cursor, end: duration });
+      }
+
+      return keepSegments;
+    }
+
+    function buildClientCutPlan(deleteList, duration) {
+      const adjustedDelete = buildAdjustedDeleteSegmentsClient(deleteList, {
+        timelineOffsetSec: previewAudioOffsetSec,
+        duration,
+        expandSec: clientPreviewExpandSec,
+        keepPaddingSec: clientPreviewKeepPaddingSec,
+        minDeleteSec: clientPreviewMinDeleteSec,
+      }).sort((a, b) => a.start - b.start);
+
+      const mergedDelete = mergeDeleteSegmentsClient(adjustedDelete);
+      const keepSegments = buildKeepSegmentsClient(mergedDelete, duration);
+      return { adjustedDelete, mergedDelete, keepSegments };
+    }
+
+    function buildPreviewSegmentsFromKeep(keepSegments) {
+      let previewCursor = 0;
+      return keepSegments.map(seg => {
+        const segDuration = Math.max(0, seg.end - seg.start);
+        const mapped = {
+          previewStart: previewCursor,
+          previewEnd: previewCursor + segDuration,
+          sourceStart: seg.start,
+          sourceEnd: seg.end,
+          timelineStart: Math.max(0, sourceToTimelineTime(seg.start)),
+          timelineEnd: Math.max(0, sourceToTimelineTime(seg.end)),
+        };
+        previewCursor += segDuration;
+        return mapped;
+      });
+    }
+
+    function buildPreviewBuffer(sourceBuffer, keepSegments, fadeSec) {
+      const ctx = ensurePreviewAudioContext();
+      const sampleRate = sourceBuffer.sampleRate;
+      const numberOfChannels = sourceBuffer.numberOfChannels;
+      const sourceLength = sourceBuffer.length;
+      const segmentDefs = keepSegments.map(seg => {
+        const startSample = Math.max(0, Math.min(sourceLength, Math.round(seg.start * sampleRate)));
+        const endSample = Math.max(startSample, Math.min(sourceLength, Math.round(seg.end * sampleRate)));
+        return {
+          startSample,
+          endSample,
+          length: Math.max(0, endSample - startSample),
+        };
+      }).filter(seg => seg.length > 0);
+
+      const totalSamples = segmentDefs.reduce((sum, seg) => sum + seg.length, 0);
+      if (totalSamples <= 0) {
+        throw new Error('当前删除范围覆盖了整条视频，无法生成剪后试听。');
+      }
+
+      const outputBuffer = ctx.createBuffer(numberOfChannels, totalSamples, sampleRate);
+      const maxFadeSamples = Math.max(0, Math.floor(fadeSec * sampleRate));
+      let writeOffset = 0;
+
+      for (let index = 0; index < segmentDefs.length; index++) {
+        const seg = segmentDefs[index];
+        const fadeSamples = Math.min(maxFadeSamples, Math.floor(seg.length / 2));
+
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+          const sourceData = sourceBuffer.getChannelData(channel);
+          const outputData = outputBuffer.getChannelData(channel);
+          outputData.set(sourceData.subarray(seg.startSample, seg.endSample), writeOffset);
+
+          if (fadeSamples > 0 && segmentDefs.length > 1) {
+            if (index > 0) {
+              for (let i = 0; i < fadeSamples; i++) {
+                outputData[writeOffset + i] *= i / fadeSamples;
+              }
+            }
+
+            if (index < segmentDefs.length - 1) {
+              const fadeStart = writeOffset + seg.length - fadeSamples;
+              for (let i = 0; i < fadeSamples; i++) {
+                outputData[fadeStart + i] *= (fadeSamples - i) / fadeSamples;
+              }
+            }
+          }
+        }
+
+        writeOffset += seg.length;
+      }
+
+      return outputBuffer;
+    }
+
+    function audioBufferToWavBlob(buffer) {
+      const numberOfChannels = buffer.numberOfChannels;
+      const sampleRate = buffer.sampleRate;
+      const frameCount = buffer.length;
+      const bytesPerSample = 2;
+      const blockAlign = numberOfChannels * bytesPerSample;
+      const dataSize = frameCount * blockAlign;
+      const wavBuffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(wavBuffer);
+
+      function writeString(offset, text) {
+        for (let i = 0; i < text.length; i++) {
+          view.setUint8(offset + i, text.charCodeAt(i));
+        }
+      }
+
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numberOfChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * blockAlign, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, 16, true);
+      writeString(36, 'data');
+      view.setUint32(40, dataSize, true);
+
+      const channelData = [];
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        channelData.push(buffer.getChannelData(channel));
+      }
+
+      let offset = 44;
+      for (let frame = 0; frame < frameCount; frame++) {
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+          const sample = Math.max(-1, Math.min(1, channelData[channel][frame]));
+          view.setInt16(
+            offset,
+            sample < 0 ? Math.round(sample * 0x8000) : Math.round(sample * 0x7FFF),
+            true
+          );
+          offset += bytesPerSample;
+        }
+      }
+
+      return new Blob([wavBuffer], { type: 'audio/wav' });
+    }
+
+    function loadAudioSource(audioEl, src) {
+      return new Promise((resolve, reject) => {
+        const handleLoaded = () => {
+          cleanup();
+          resolve();
+        };
+        const handleError = () => {
+          cleanup();
+          reject(new Error('试听音频加载失败'));
+        };
+        const cleanup = () => {
+          audioEl.removeEventListener('loadedmetadata', handleLoaded);
+          audioEl.removeEventListener('error', handleError);
+        };
+
+        audioEl.addEventListener('loadedmetadata', handleLoaded);
+        audioEl.addEventListener('error', handleError);
+        audioEl.src = src;
+        audioEl.load();
+      });
+    }
+
+    async function safePlayPreview() {
+      try {
+        await previewAudio.play();
+      } catch (err) {
+        // 浏览器可能阻止自动播放，保留当前状态即可
+      }
+    }
+
+    async function applySourcePreview(signature = '[]', statusText = '当前没有选中删除片段，默认试听与原音一致。') {
+      previewRenderInFlight = true;
+      previewRefreshBtn.disabled = true;
+      setPreviewStatus('正在更新跳播试听状态...', true);
+
+      try {
+        renderedPreviewSignature = signature;
+        setPreviewStatus(statusText);
+      } finally {
+        previewRenderInFlight = false;
+        previewRefreshBtn.disabled = false;
+      }
+    }
+
+    function schedulePreviewRender(options = {}) {
+      if (options.autoplay) pendingPreviewAutoplay = true;
+      if (typeof options.seekTime === 'number') pendingTimelineSeek = options.seekTime;
+
+      if (previewRenderTimer) {
+        clearTimeout(previewRenderTimer);
+      }
+
+      const delay = options.immediate ? 0 : 120;
+      if (!options.immediate) {
+        setPreviewStatus('正在根据当前选择后台更新剪后试听...', true);
+      }
+
+      previewRenderTimer = setTimeout(() => {
+        previewRenderTimer = null;
+        renderCutPreview();
+      }, delay);
+    }
+
+    async function renderCutPreview() {
+      const segments = getMergedSelectedSegments();
+      const signature = JSON.stringify(segments);
+
+      if (signature === renderedPreviewSignature && previewAudio.getAttribute('src')) {
+        if (pendingTimelineSeek !== null) {
+          const targetSeek = pendingTimelineSeek;
+          pendingTimelineSeek = null;
+          previewAudio.currentTime = timelineToPreviewTime(targetSeek);
+          updatePlaybackUI();
+        }
+        if (pendingPreviewAutoplay) {
+          pendingPreviewAutoplay = false;
+          await safePlayPreview();
+        }
+        return;
+      }
+
+      if (signature === '[]') {
+        await applySourcePreview(signature);
+        return;
+      }
+
+      const requestId = ++previewRenderSeq;
+      previewRenderInFlight = true;
+      previewRefreshBtn.disabled = true;
+      setPreviewStatus(\`正在切到直接跳播试听，当前有 \${segments.length} 段删除范围...\`, true);
+
+      try {
+        if (requestId !== previewRenderSeq) return;
+        await applySourcePreview(signature, \`默认播放的是直接跳播的剪后试听模拟，当前有 \${segments.length} 段删除范围。\`);
+      } catch (err) {
+        if (requestId !== previewRenderSeq) return;
+        setPreviewStatus('剪后试听更新失败：' + err.message);
+      } finally {
+        if (requestId === previewRenderSeq) {
+          previewRenderInFlight = false;
+          previewRefreshBtn.disabled = false;
+        }
+      }
+    }
+
+    function forceRefreshPreview() {
+      schedulePreviewRender({ immediate: true });
+    }
+
+    function setPlaybackRate(rate) {
+      previewAudio.playbackRate = rate;
+    }
+
+    function togglePrimaryPlayback() {
+      if (!previewAudio.getAttribute('src')) {
+        previewAudio.src = fallbackPreviewAudioSrc;
+        previewAudio.load();
+      }
+
+      if (previewRenderInFlight) {
+        return;
+      }
+
+      if (previewAudio.paused) safePlayPreview();
+      else previewAudio.pause();
+    }
+
+    function seekPreviewToTimeline(timelineSec, autoplay = false) {
+      if (!previewAudio.getAttribute('src')) {
+        previewAudio.src = fallbackPreviewAudioSrc;
+        previewAudio.load();
+      }
+      previewAudio.currentTime = timelineToPreviewTime(timelineSec);
+      updatePlaybackUI();
+
+      if (autoplay) {
+        safePlayPreview();
+      }
     }
 
     function clearAll() {
@@ -822,7 +1387,9 @@ const html = `<!DOCTYPE html>
     }
 
     async function executeCut() {
-      const videoDuration = previewToTimelineTime(wavesurfer.getDuration());
+      const videoDuration = words.length > 0
+        ? words[words.length - 1].end
+        : sourceToTimelineTime(getSourceDuration());
       const videoMinutes = (videoDuration / 60).toFixed(1);
       const estimatedTime = Math.max(5, Math.ceil(videoDuration / 4));
       const estText = estimatedTime >= 60
@@ -877,14 +1444,42 @@ const html = `<!DOCTYPE html>
     }
 
     document.addEventListener('keydown', e => {
-      if (e.code === 'Space') { e.preventDefault(); wavesurfer.playPause(); }
-      else if (e.code === 'ArrowLeft') { wavesurfer.setTime(Math.max(0, wavesurfer.getCurrentTime() - (e.shiftKey ? 5 : 1))); }
-      else if (e.code === 'ArrowRight') { wavesurfer.setTime(wavesurfer.getCurrentTime() + (e.shiftKey ? 5 : 1)); }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePrimaryPlayback();
+      } else if (e.code === 'ArrowLeft') {
+        const delta = e.shiftKey ? 5 : 1;
+        const nextTimelineTime = Math.max(0, previewToTimelineTime(previewAudio.currentTime || 0) - delta);
+        seekPreviewToTimeline(nextTimelineTime, !previewAudio.paused);
+      } else if (e.code === 'ArrowRight') {
+        const delta = e.shiftKey ? 5 : 1;
+        const activeSegments = getActivePreviewSegments();
+        const maxTimelineTime = activeSegments.length > 0
+          ? activeSegments[activeSegments.length - 1].timelineEnd
+          : sourceToTimelineTime(getSourceDuration());
+        const nextTimelineTime = Math.min(
+          maxTimelineTime,
+          previewToTimelineTime(previewAudio.currentTime || 0) + delta
+        );
+        seekPreviewToTimeline(nextTimelineTime, !previewAudio.paused);
+      }
     });
+
+    previewAudio.addEventListener('play', () => {
+      skipSelectedDuringPreview();
+    });
+
+    previewAudio.addEventListener('timeupdate', () => {
+      if (skipSelectedDuringPreview()) return;
+      updatePlaybackUI();
+    });
+    previewAudio.addEventListener('loadedmetadata', updatePlaybackUI);
+    previewAudio.addEventListener('pause', updatePlaybackUI);
 
     render();
     loadRuntimeInfo();
     loadShowNotes();
+    schedulePreviewRender({ immediate: true });
   </script>
 </body>
 </html>`;

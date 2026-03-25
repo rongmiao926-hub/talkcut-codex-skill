@@ -3,7 +3,8 @@
  * 审核服务器
  *
  * 功能：
- * 1. 提供静态文件服务（review.html, audio.mp3）
+ * 1. 提供静态文件服务（review.html, audio.*）
+ * 2. POST /api/preview-audio - 生成按当前选择渲染的剪后试听
  * 2. POST /api/cut - 接收删除列表，执行剪辑
  * 3. GET/POST /api/show-notes - 读取或保存 AI 生成的视频介绍草稿
  *
@@ -155,6 +156,190 @@ function buildAudioFilter(seg, index, totalSegments, fadeSec) {
   return `${filter}[a${index}]`;
 }
 
+function probeReviewAudioStartTime() {
+  try {
+    const reviewAudioFile = fs.existsSync('audio.wav')
+      ? 'audio.wav'
+      : (fs.existsSync('audio.mp3') ? 'audio.mp3' : null);
+
+    if (!reviewAudioFile) return 0;
+
+    const output = execSync(
+      `ffprobe -v error -show_entries format=start_time -of csv=p=0 "${reviewAudioFile}"`,
+      { encoding: 'utf8' }
+    ).trim();
+    return parseFloat(output) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function mergeDeleteSegments(segments) {
+  const merged = [];
+  for (const seg of segments) {
+    if (merged.length === 0 || seg.start > merged[merged.length - 1].end) {
+      merged.push({ ...seg });
+    } else {
+      merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, seg.end);
+    }
+  }
+  return merged;
+}
+
+function buildKeepSegments(mergedDelete, duration) {
+  const keepSegments = [];
+  let cursor = 0;
+
+  for (const del of mergedDelete) {
+    if (del.start > cursor) {
+      keepSegments.push({ start: cursor, end: del.start });
+    }
+    cursor = del.end;
+  }
+
+  if (cursor < duration) {
+    keepSegments.push({ start: cursor, end: duration });
+  }
+
+  return keepSegments;
+}
+
+function buildTempOutputPath(outputPath) {
+  const resolved = path.resolve(outputPath);
+  const dir = path.dirname(resolved);
+  const ext = path.extname(resolved) || '.wav';
+  const base = path.basename(resolved, ext);
+  return path.join(dir, `${base}.tmp.${process.pid}.${Date.now()}${ext}`);
+}
+
+function buildCutPlan(input, deleteList) {
+  const envConfig = readEnvConfig();
+  const CUT_EXPAND_MS = parseMs(envConfig.CUT_EXPAND_MS, 0);
+  const CUT_KEEP_PADDING_MS = parseMs(envConfig.CUT_KEEP_PADDING_MS, 0);
+  const CUT_MIN_DELETE_MS = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
+  const CROSSFADE_MS = parseMs(envConfig.CROSSFADE_MS, 30);
+
+  console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
+
+  const timelineMetadata = readTimelineMetadata();
+  const reviewAudioStartSec = probeReviewAudioStartTime();
+  const sourceAudioStartSec = probeSourceAudioStartTime(input);
+  const timelineOffsetSec = timelineMetadata
+    ? Number(timelineMetadata.timelineOffsetSec) || 0
+    : sourceAudioStartSec - reviewAudioStartSec;
+
+  if (timelineMetadata) {
+    console.log(`🔧 已读取时间轴元数据，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
+  } else {
+    console.log(`🔧 审核音频起点=${reviewAudioStartSec.toFixed(3)}s，源视频音频起点=${sourceAudioStartSec.toFixed(3)}s，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
+  }
+
+  const probeCmd = `ffprobe -v error -show_entries format=duration -of csv=p=0 "${fileArg(input)}"`;
+  const duration = parseFloat(execSync(probeCmd).toString().trim());
+
+  const expandSec = CUT_EXPAND_MS / 1000;
+  const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
+  const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
+  const crossfadeSec = CROSSFADE_MS / 1000;
+
+  const adjustedDelete = buildAdjustedDeleteSegments(deleteList, {
+    timelineOffsetSec,
+    duration,
+    expandSec,
+    keepPaddingSec,
+    minDeleteSec,
+  }).sort((a, b) => a.start - b.start);
+
+  if (adjustedDelete.length === 0 && deleteList.length > 0) {
+    console.log('⚠️ 当前删除片段都很短，按保留策略收缩后没有可执行的删除范围');
+  }
+
+  const mergedDelete = mergeDeleteSegments(adjustedDelete);
+  const keepSegments = buildKeepSegments(mergedDelete, duration);
+
+  console.log(`保留 ${keepSegments.length} 个片段，删除 ${mergedDelete.length} 个片段`);
+
+  return {
+    duration,
+    keepSegments,
+    mergedDelete,
+    crossfadeSec,
+    timelineOffsetSec,
+  };
+}
+
+function executeFFmpegPreviewAudio(input, deleteList, output) {
+  if (!Array.isArray(deleteList) || deleteList.length === 0) {
+    throw new Error('当前还没有选中任何删除片段，直接听上面的原音即可。');
+  }
+
+  const plan = buildCutPlan(input, deleteList);
+  if (plan.mergedDelete.length === 0) {
+    throw new Error('当前删除片段太短，按保留策略收缩后没有可执行的删除范围。');
+  }
+  if (plan.keepSegments.length === 0) {
+    throw new Error('当前删除范围覆盖了整条视频，无法生成剪后试听。');
+  }
+
+  let filters = [];
+  let aconcat = '';
+
+  for (let i = 0; i < plan.keepSegments.length; i++) {
+    const seg = plan.keepSegments[i];
+    filters.push(buildAudioFilter(seg, i, plan.keepSegments.length, plan.crossfadeSec));
+    aconcat += `[a${i}]`;
+  }
+
+  if (plan.keepSegments.length === 1) {
+    filters.push('[a0]anull[outa]');
+  } else {
+    filters.push(`${aconcat}concat=n=${plan.keepSegments.length}:v=0:a=1[outa]`);
+  }
+
+  const filterComplex = filters.join(';');
+  const tempOutput = buildTempOutputPath(output);
+  const cmd = `ffmpeg -y -i "${fileArg(input)}" -filter_complex "${filterComplex}" -map "[outa]" -c:a pcm_s16le "${fileArg(tempOutput)}"`;
+
+  try {
+    execSync(cmd, { stdio: 'pipe' });
+    if (fs.existsSync(output)) {
+      fs.unlinkSync(output);
+    }
+    fs.renameSync(tempOutput, output);
+  } catch (err) {
+    if (fs.existsSync(tempOutput)) {
+      fs.unlinkSync(tempOutput);
+    }
+    throw err;
+  }
+
+  const newDuration = parseFloat(execSync(
+    `ffprobe -v error -show_entries format=duration -of csv=p=0 "${fileArg(output)}"`
+  ).toString().trim());
+
+  let previewCursor = 0;
+  const previewSegments = plan.keepSegments.map(seg => {
+    const segDuration = Math.max(0, seg.end - seg.start);
+    const mapped = {
+      previewStart: previewCursor,
+      previewEnd: previewCursor + segDuration,
+      sourceStart: seg.start,
+      sourceEnd: seg.end,
+      timelineStart: Math.max(0, seg.start - plan.timelineOffsetSec),
+      timelineEnd: Math.max(0, seg.end - plan.timelineOffsetSec),
+    };
+    previewCursor += segDuration;
+    return mapped;
+  });
+
+  return {
+    duration: newDuration,
+    keepSegments: plan.keepSegments.length,
+    deletedSegments: plan.mergedDelete.length,
+    segments: previewSegments,
+  };
+}
+
 const MIME_TYPES = {
   '.html': 'text/html',
   '.js': 'application/javascript',
@@ -175,6 +360,35 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(200);
     res.end();
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/preview-audio') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const deleteList = JSON.parse(body || '[]');
+        const outputFile = path.resolve('preview_cut.wav');
+        const result = executeFFmpegPreviewAudio(VIDEO_FILE, deleteList, outputFile);
+
+        console.log(`🎧 已生成剪后试听: ${outputFile}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          output: outputFile,
+          url: '/preview_cut.wav',
+          duration: result.duration.toFixed(2),
+          keepSegments: result.keepSegments,
+          deletedSegments: result.deletedSegments,
+          segments: result.segments,
+        }));
+      } catch (err) {
+        console.error('❌ 生成剪后试听失败:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
     return;
   }
 
@@ -403,83 +617,10 @@ function getEncoder() {
 
 // 内置 FFmpeg 剪辑逻辑（filter_complex 精确剪辑 + buffer + crossfade）
 function executeFFmpegCut(input, deleteList, output) {
-  // 配置参数
-  const envConfig = readEnvConfig();
-  const CUT_EXPAND_MS = parseMs(envConfig.CUT_EXPAND_MS, 0);
-  const CUT_KEEP_PADDING_MS = parseMs(envConfig.CUT_KEEP_PADDING_MS, 0);
-  const CUT_MIN_DELETE_MS = parseMs(envConfig.CUT_MIN_DELETE_MS, 120);
-  const CROSSFADE_MS = parseMs(envConfig.CROSSFADE_MS, 30);
-
-  console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
-
-  // 检测审核音频和源视频音频的时间轴映射
-  const timelineMetadata = readTimelineMetadata();
-  let reviewAudioStartSec = 0;
-  try {
-    const reviewAudioFile = fs.existsSync('audio.wav') ? 'audio.wav' : 'audio.mp3';
-    const offsetCmd = `ffprobe -v error -show_entries format=start_time -of csv=p=0 ${reviewAudioFile}`;
-    reviewAudioStartSec = parseFloat(execSync(offsetCmd).toString().trim()) || 0;
-  } catch (e) {
-    // 忽略，使用默认 0
-  }
-  const sourceAudioStartSec = probeSourceAudioStartTime(input);
-  const timelineOffsetSec = timelineMetadata
-    ? Number(timelineMetadata.timelineOffsetSec) || 0
-    : sourceAudioStartSec - reviewAudioStartSec;
-  if (timelineMetadata) {
-    console.log(`🔧 已读取时间轴元数据，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
-  } else {
-    console.log(`🔧 审核音频起点=${reviewAudioStartSec.toFixed(3)}s，源视频音频起点=${sourceAudioStartSec.toFixed(3)}s，导出映射补偿=${timelineOffsetSec.toFixed(3)}s`);
-  }
-
-  // 获取视频总时长
-  const probeCmd = `ffprobe -v error -show_entries format=duration -of csv=p=0 "${fileArg(input)}"`;
-
-  const duration = parseFloat(execSync(probeCmd).toString().trim());
-
-  const expandSec = CUT_EXPAND_MS / 1000;
-  const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
-  const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
-  const crossfadeSec = CROSSFADE_MS / 1000;
-
-  // 补偿偏移 + 收缩删除范围，尽量多保留边界附近的正常文字
-  const expandedDelete = buildAdjustedDeleteSegments(deleteList, {
-    timelineOffsetSec,
-    duration,
-    expandSec,
-    keepPaddingSec,
-    minDeleteSec,
-  }).sort((a, b) => a.start - b.start);
-
-  if (expandedDelete.length === 0 && deleteList.length > 0) {
-    console.log('⚠️ 当前删除片段都很短，按保留策略收缩后没有可执行的删除范围');
-  }
-
-  // 合并重叠的删除段
-  const mergedDelete = [];
-  for (const seg of expandedDelete) {
-    if (mergedDelete.length === 0 || seg.start > mergedDelete[mergedDelete.length - 1].end) {
-      mergedDelete.push({ ...seg });
-    } else {
-      mergedDelete[mergedDelete.length - 1].end = Math.max(mergedDelete[mergedDelete.length - 1].end, seg.end);
-    }
-  }
-
-  // 计算保留片段
-  const keepSegments = [];
-  let cursor = 0;
-
-  for (const del of mergedDelete) {
-    if (del.start > cursor) {
-      keepSegments.push({ start: cursor, end: del.start });
-    }
-    cursor = del.end;
-  }
-  if (cursor < duration) {
-    keepSegments.push({ start: cursor, end: duration });
-  }
-
-  console.log(`保留 ${keepSegments.length} 个片段，删除 ${mergedDelete.length} 个片段`);
+  const plan = buildCutPlan(input, deleteList);
+  const keepSegments = plan.keepSegments;
+  const mergedDelete = plan.mergedDelete;
+  const duration = plan.duration;
 
   // 生成 filter_complex（保时长淡入淡出）
   let filters = [];
@@ -489,7 +630,7 @@ function executeFFmpegCut(input, deleteList, output) {
   for (let i = 0; i < keepSegments.length; i++) {
     const seg = keepSegments[i];
     filters.push(`[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`);
-    filters.push(buildAudioFilter(seg, i, keepSegments.length, crossfadeSec));
+    filters.push(buildAudioFilter(seg, i, keepSegments.length, plan.crossfadeSec));
     vconcat += `[v${i}]`;
     aconcat += `[a${i}]`;
   }
